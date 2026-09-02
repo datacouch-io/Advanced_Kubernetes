@@ -1,0 +1,16 @@
+=== mTLS: PeerAuthentication STRICT on namespace demo ===
+
+Before (PERMISSIVE, default): plaintext curl from plain-client/sleep-plain (no sidecar) -> httpbin.demo:8000
+HTTP 200
+
+$ kubectl apply -f peerauth-strict.yaml   (mode: STRICT)
+
+After (STRICT): same plaintext curl from non-mesh pod -> httpbin.demo:8000
+curl: (56) Recv failure: Connection reset by peer
+
+After (STRICT): in-mesh call fortio (sidecar) -> httpbin (sidecar), still mTLS-encrypted automatically
+Code 200 : 5 (100.0 %)
+
+$ istioctl x describe pod fortio-deploy-xxx -n demo
+   Workload mTLS mode: STRICT
+   Applied PeerAuthentication: default.demo

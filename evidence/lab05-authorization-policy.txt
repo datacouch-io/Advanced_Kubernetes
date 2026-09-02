@@ -1,0 +1,15 @@
+=== AuthorizationPolicy on top of mTLS: identity-based access control ===
+
+AuthorizationPolicy httpbin-allow-fortio-only: ALLOW only from principal
+cluster.local/ns/demo/sa/default (i.e. workloads in the demo namespace)
+
+$ from fortio (demo namespace, sa=default, IN the allow list):
+Code 200 : 5 (100.0 %)
+
+$ from sleep-other (other-team namespace, sa=default, NOT in the allow list, but still
+  fully in-mesh with a valid mTLS certificate):
+HTTP 403
+
+Demonstrates: mTLS (PeerAuthentication) proves WHO you are cryptographically;
+AuthorizationPolicy decides WHAT that identity is allowed to call. A valid mesh
+certificate is necessary but not sufficient -- both layers are independently enforced.

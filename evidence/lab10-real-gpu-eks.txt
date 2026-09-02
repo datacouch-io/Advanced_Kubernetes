@@ -1,0 +1,45 @@
+=== Real GPU node autoscaling from zero: live tested on AWS EKS ===
+
+eksctl-created managed node group 'gpu-ng': g4dn.xlarge, AmazonLinux2023 (accelerated AMI),
+desiredCapacity=0 minSize=0 maxSize=1, tainted nvidia.com/gpu=true:NoSchedule.
+eksctl auto-installed the NVIDIA device plugin because it detected the accelerated AMI + GPU
+instance type -- no manual device-plugin manifest needed.
+
+Cluster Autoscaler 1.35.0 (chart default) got stuck in a permanent retry loop trying to watch
+DRA-related API types (DeviceClass, ResourceClaim, ResourceSlice) that don't exist on this
+EKS 1.33 cluster -- 'the server could not find the requested resource', repeating forever and
+never reaching the actual scale-up evaluation loop. Pinning image.tag=v1.33.0 (matching the
+cluster's Kubernetes minor version, instead of the chart's newer default) resolved it immediately.
+
+IAM gotcha: the autoscaling IAM policy must be attached to the role of the node group the
+Cluster Autoscaler POD actually runs on (here: cpu-ng, the only node group with a running node
+at the time) -- NOT the target GPU node group's role, which has no running instances yet to
+even host the CA pod. Attaching it to gpu-ng's role first produced:
+  AccessDenied: ... assumed-role/eksctl-...-nodegroup-c-... is not authorized to perform:
+  autoscaling:DescribeAutoScalingGroups
+
+=== Deploy a GPU pod, watch the ASG scale from 0 ===
+
+$ kubectl describe pod gpu-real-test
+FailedScheduling: 0/1 nodes are available: 1 Insufficient nvidia.com/gpu.
+
+CA log (once healthy):
+  orchestrator.go: Final scale-up plan: [{eks-gpu-ng-... 0->1 (max: 1)}]
+  executor.go: Scale-up: setting group eks-gpu-ng-... size to 1
+  Event: TriggeredScaleUp -- pod triggered scale-up: [{eks-gpu-ng-... 0->1 (max: 1)}]
+
+$ kubectl get nodes / kubectl get pod gpu-real-test  (timeline)
+t+0s   : 1 node (cpu-ng only), pod Pending
+t+~7m  : (time already elapsed debugging CA IAM/version issues before the real timer started)
+t+25s  : 2nd node joins (gpu-ng), pod still Pending
+t+50s  : pod Running
+
+$ kubectl exec gpu-real-test -- nvidia-smi
+NVIDIA-SMI 580.178.04   Driver Version: 580.178.04   CUDA Version: 13.0
+GPU 0: Tesla T4   Memory-Usage: 0MiB / 15360MiB   GPU-Util: 0%
+
+$ kubectl get node <gpu-node> -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'
+1
+
+A real NVIDIA Tesla T4, on a real EC2 instance, that did not exist until a Pod asked for one --
+genuinely confirmed inside the running container, not just inferred from Kubernetes objects.

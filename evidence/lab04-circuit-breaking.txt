@@ -1,0 +1,9 @@
+=== DestinationRule: connectionPool maxConnections=1, http1MaxPendingRequests=1 + outlierDetection consecutive5xxErrors=1 ===
+
+$ fortio load -c 1 -qps 0 -n 20 http://httpbin:8000/get   (within pool limit)
+Code 200 : 20 (100.0 %)
+
+$ fortio load -c 3 -qps 0 -n 100 http://httpbin:8000/get  (3x over pool limit)
+Sockets used: 65 (for perfect keepalive, would be 3)
+Code 200 : 37 (37.0 %)
+Code 503 : 63 (63.0 %)

@@ -1,0 +1,15 @@
+=== Retries demo: real upstream disruption (kill httpbin pods mid-traffic), not fault-injection ===
+
+Setup: httpbin scaled to 3 replicas. fortio load -c 16 -qps 80 -t 10s against httpbin,
+with 3 pods force-deleted (grace-period=0) at t=2s, t=4s, t=6s into the run.
+
+$ VirtualService retries.attempts=0 (retries explicitly disabled)
+Code 200 : 781 (97.6 %)
+Code 503 : 19 (2.4 %)
+
+$ VirtualService retries{attempts:3, perTryTimeout:1s, retryOn:5xx,reset,connect-failure,refused-stream}
+Code 200 : 784 (100.0 %)
+
+Identical disruption pattern, retries eliminate 100% of the errors caused by mid-flight
+pod termination (connection resets to the just-deleted pod's IP before the Kubernetes
+endpoint/Envoy cluster update propagates) by transparently retrying against a healthy replica.

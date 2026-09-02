@@ -1,0 +1,30 @@
+=== Node Auto-Provisioning (NAP): live tested on real GKE ===
+
+Cluster autoscaling.enableNodeAutoprovisioning=true, resourceLimits: cpu 1-16, memory 1-64
+Deployed: 1 pod requesting cpu=4, memory=8Gi -- doesn't fit the existing e2-medium pool
+(default-pool nodes have only ~940m allocatable CPU) or ANY pre-existing pool.
+
+$ kubectl get pods -l app=nap-scale-test
+t+0s    : Pending
+t+80s   : still Pending (NAP evaluating and creating candidate node pools)
+t+100s  : ContainerCreating
+t+120s  : Running
+
+$ gcloud container node-pools list --cluster advk8s-autoscale
+NAME                        MACHINE_TYPE
+default-pool                e2-medium
+nap-e2-highcpu-2-1roxlloi   e2-highcpu-2   <- NAP's first candidate: 2 vCPU, doesn't fit a 4-CPU pod
+nap-e2-standard-8-uu1jadyd  e2-standard-8  <- NAP's actual fit: 8 vCPU/32GB, comfortably fits
+
+$ kubectl get nodes -o custom-columns=NAME,POOL,ALLOCATABLE_CPU
+gke-...-default-pool-...        default-pool                 940m
+gke-...-nap-e2-highcpu-2-...     nap-e2-highcpu-2-1roxlloi    1930m  (created, unused, empty)
+gke-...-nap-e2-highcpu-2-...     nap-e2-highcpu-2-1roxlloi    1930m  (created, unused, empty)
+gke-...-nap-e2-standard--...     nap-e2-standard-8-uu1jadyd   7910m  <- pod actually scheduled here
+
+The pod landed on the e2-standard-8 node. GKE's NAP algorithm evaluates multiple candidate
+machine shapes for a batch of pending pods and can provision more than one pool while deciding;
+pools that end up empty (like the two e2-highcpu-2 nodes here) are expected to be scaled back
+down by the ordinary Cluster Autoscaler idle-node logic within its normal idle timeout (~10 min
+default) -- NAP does not leave you to clean these up by hand, but be aware there IS a short
+window where you're paying for exploratory node pools you didn't explicitly ask for.

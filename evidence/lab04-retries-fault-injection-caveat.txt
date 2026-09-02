@@ -1,0 +1,18 @@
+=== IMPORTANT FINDING: Istio fault-injected aborts are NOT retried ===
+
+$ VirtualService: fault.abort 50% + retries{attempts:3, retryOn: 5xx}  -> httpbin /get, n=100, c=4
+Code 200 : 57 (57.0 %)
+Code 503 : 43 (43.0 %)
+
+$ VirtualService: fault.abort 50% only (retries removed) -> httpbin /get, n=100, c=4
+Code 200 : 48 (48.0 %)
+Code 503 : 52 (52.0 %)
+
+If retries genuinely re-drove the fault-injected abort, expected success with 3 retries
+against a 50% independent failure rate would be ~1-0.5^4 = 93.75%. Observed success
+(57%) is barely above the no-retry baseline (48%), confirming Envoy's fault-injection
+filter generates the abort response client-side before the request reaches the retry-
+eligible router/upstream path -- so retries do not re-fire against injected faults.
+This matches Istio's documented behavior but is a common misconception in trainings that
+pair retries with fault-injection to 'prove' retries work. Lab uses a real upstream
+failure (pod disruption) instead -- see lab04-retries-pod-disruption.txt.

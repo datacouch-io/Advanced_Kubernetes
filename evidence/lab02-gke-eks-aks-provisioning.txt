@@ -1,0 +1,48 @@
+=== GKE cluster ===
+$ gcloud container clusters create advk8s-gke --zone=us-central1-a --num-nodes=2 --machine-type=e2-medium
+$ gcloud container clusters get-credentials advk8s-gke --zone us-central1-a
+$ kubectl get nodes -o wide
+gke-advk8s-gke-default-pool-346fc04a-sm4c   Ready   v1.35.7-gke.1027000
+gke-advk8s-gke-default-pool-346fc04a-xwnj   Ready   v1.35.7-gke.1027000
+
+=== AKS cluster ===
+$ az group create --name advk8s-rg --location eastus
+$ az aks create --resource-group advk8s-rg --name advk8s-aks --node-count 2 --node-vm-size Standard_B2s --generate-ssh-keys
+$ az aks get-credentials --resource-group advk8s-rg --name advk8s-aks
+$ kubectl --context advk8s-aks get nodes -o wide
+NAME                                STATUS   ROLES    AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION     CONTAINER-RUNTIME
+aks-nodepool1-98415359-vmss000000   Ready    <none>   7m53s   v1.35.7   10.224.0.4    <none>        Ubuntu 24.04.4 LTS   6.8.0-1064-azure   containerd://2.3.3-2
+aks-nodepool1-98415359-vmss000001   Ready    <none>   7m54s   v1.35.7   10.224.0.5    <none>        Ubuntu 24.04.4 LTS   6.8.0-1064-azure   containerd://2.3.3-2
+
+=== Required GCP APIs for fleet + attached clusters (enabled) ===
+container.googleapis.com compute.googleapis.com gkehub.googleapis.com gkeconnect.googleapis.com
+gkemulticloud.googleapis.com iam.googleapis.com cloudresourcemanager.googleapis.com
+kubernetesmetadata.googleapis.com logging.googleapis.com monitoring.googleapis.com connectgateway.googleapis.com
+
+=== Attached-cluster platform versions available (us-central1) ===
+Fetching server config for us-central1
+VERSION       ENABLED  RELEASE_DATE  END_OF_LIFE_DATE  END_OF_LIFE
+1.35.0-gke.1  True     2026-06-26    2027-04-19        False
+1.34.0-gke.2  True     2026-06-26    2026-12-19        False
+1.34.0-gke.1  True     2026-02-06    2026-12-19        False
+1.33.0-gke.3  True     2026-06-26    2026-09-19        False
+1.33.0-gke.2  True     2026-02-06    2026-09-19        False
+1.33.0-gke.1  True     2025-10-31    2026-09-19        False
+
+=== Register AKS as attached cluster ===
+$ ISSUER_URL=$(az aks show -n advk8s-aks -g advk8s-rg --query oidcIssuerProfile.issuerUrl -o tsv)
+https://eastus.oic.prod-aks.azure.com/a27b13fc-a10f-4aad-855a-d7cca606747d/e4854f15-a933-411f-aff7-72b7d57dc612/
+
+$ gcloud container attached clusters register advk8s-aks \
+    --location=us-central1 --fleet-project=689187653331 \
+    --platform-version=1.35.0-gke.1 --distribution=aks \
+    --issuer-url="$ISSUER_URL" --context=advk8s-aks --kubeconfig=~/.kube/config
+
+Creating in-cluster install agent
+Created cluster [advk8s-aks]...
+NAME        PLATFORM_VERSION  KUBERNETES_VERSION  STATE
+advk8s-aks  1.35.0-gke.1      1.35                RUNNING
+
+$ gcloud container fleet memberships list
+NAME        UNIQUE_ID                             LOCATION
+advk8s-aks  0a95fc08-8428-4255-b279-12a26b0a7605  global

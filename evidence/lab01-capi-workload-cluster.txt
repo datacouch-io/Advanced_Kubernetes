@@ -1,0 +1,21 @@
+$ clusterctl init --infrastructure docker
+(management cluster: kind cluster 'capi-mgmt', created with docker.sock extraMount)
+
+$ clusterctl generate cluster capi-workload --infrastructure docker --flavor development --kubernetes-version v1.33.1 --control-plane-machine-count=1 --worker-machine-count=2 | kubectl apply -f -
+(clusterclass.cluster.x-k8s.io/quick-start, devclustertemplate, kubeadmcontrolplanetemplate, devmachinetemplate x2, devmachinepooltemplate, kubeadmconfigtemplate, cluster.cluster.x-k8s.io/capi-workload all created)
+
+$ KUBECONFIG=capi-workload.kubeconfig kubectl get nodes -o wide
+NAME                                   STATUS   ROLES           AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION    CONTAINER-RUNTIME
+capi-workload-7s2wr-9hjp7              Ready    control-plane   7m55s   v1.33.1   172.19.0.4    <none>        Debian GNU/Linux 12 (bookworm)   7.0.12-linuxkit   containerd://2.1.1
+capi-workload-md-0-g5ntv-dmh6t-dn97n   Ready    <none>          110s    v1.33.1   172.19.0.6    <none>        Debian GNU/Linux 12 (bookworm)   7.0.12-linuxkit   containerd://2.1.1
+capi-workload-md-0-g5ntv-dmh6t-lfxlf   Ready    <none>          109s    v1.33.1   172.19.0.5    <none>        Debian GNU/Linux 12 (bookworm)   7.0.12-linuxkit   containerd://2.1.1
+
+$ clusterctl describe cluster capi-workload
+NAME                                                             REPLICAS AVAILABLE READY UP TO DATE STATUS REASON     SINCE  MESSAGE                                                                         
+Cluster default/capi-workload, v1.33.1                           3/3      3         3     3          True   Available  21s                                                                                    
+├─DevCluster default/capi-workload-w5858                                                             True   Ready      8m39s                                                                                  
+├─KubeadmControlPlane default/capi-workload-7s2wr, v1.33.1       1/1      1         1     1          True   Available  7m28s                                                                                  
+│ └─Machine default/capi-workload-7s2wr-9hjp7, v1.33.1           1        1         1     1          True   Ready      5s                                                                                     
+└─Workers                                                                                                                                                                                                     
+  └─MachineDeployment default/capi-workload-md-0-g5ntv, v1.33.1  2/2      2         2     2          True   Available  21s                                                                                    
+    └─2 Machines...                                                       2         2     2          True   Ready      24s    See capi-workload-md-0-g5ntv-dmh6t-dn97n, capi-workload-md-0-g5ntv-dmh6t-lfxlf  

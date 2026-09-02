@@ -1,0 +1,14 @@
+=== Cluster Autoscaler: live tested on real GKE ===
+
+Cluster: 1x e2-medium node (~940m CPU / ~2.8Gi allocatable), autoscaling min=1 max=3
+Deployed: 6 replicas x (cpu: 400m, memory: 200Mi) = 2400m CPU total requested
+(~2 pods fit per e2-medium node given 940m allocatable, so 3 nodes needed for all 6)
+
+t+0s   : 1 node,  6/6 pods Pending
+t+40s  : 1 node,  6/6 pods still Pending (CA reacting)
+t+60s  : 2 nodes, 1 ContainerCreating, 5 Pending
+t+80s  : 2 nodes, 3 Running, 3 Pending
+t+100s : 3 nodes, 6/6 Running
+
+Cluster Autoscaler correctly scaled the node pool from 1 to 3 nodes (its configured max)
+purely in response to unschedulable Pending pods, with no manual intervention.

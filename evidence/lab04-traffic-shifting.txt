@@ -1,0 +1,3 @@
+=== VirtualService weight 90/10 (helloworld v1/v2), 30 requests ===
+  27 Hello version: v1
+   3 Hello version: v2

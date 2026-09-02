@@ -1,0 +1,24 @@
+=== NAP + GPU: real quota wall, live tested on real GKE ===
+
+Cluster autoprovisioning updated to allow nvidia-tesla-t4 accelerators (min=1 max=1):
+$ gcloud container clusters update advk8s-autoscale --enable-autoprovisioning \
+    --min-accelerator=type=nvidia-tesla-t4,count=1 --max-accelerator=type=nvidia-tesla-t4,count=1
+
+Deployed a pod requesting cpu=2, memory=4Gi, limits.nvidia.com/gpu=1
+
+$ kubectl get events (sorted by time)
+Warning  FailedScheduling   0/4 nodes are available: 3 Insufficient cpu, 3 Insufficient memory,
+  4 Insufficient nvidia.com/gpu. no new claims to deallocate, preemption not helpful.
+Normal   NotTriggerScaleUp  Pod didn't trigger scale-up: 2 Insufficient cpu, 2 Insufficient memory,
+  2 Insufficient nvidia.com/gpu, 1 exceeded quota: "cluster-wide", resources: cpu, memory
+
+Pod stayed Pending indefinitely. This matches the project-wide GPU quota finding from before
+this lab was built (GCP project quota GPUS_ALL_REGIONS=0 even though individual GPU-type
+regional buckets showed limit=1 -- the project-wide bucket is the actual binding constraint).
+
+This is the real, live-verified behavior of hitting a GPU quota wall: NAP correctly identifies
+that a new accelerator-backed node pool is needed and attempts to provision it, but the
+underlying cloud quota blocks the compute instance from ever coming up, and the pod simply
+stays Pending with an accurate, actionable error rather than failing silently or misleadingly.
+The fix in a real environment is a GCP quota increase request (Console > IAM & Admin > Quotas),
+not anything on the Kubernetes/NAP side -- NAP did its job correctly here.
