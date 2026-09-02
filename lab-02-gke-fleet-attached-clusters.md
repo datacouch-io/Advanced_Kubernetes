@@ -307,6 +307,8 @@ gcloud container attached clusters describe advk8s-aks --location=us-central1 --
 
 You should also be able to see all fleet members, including native GKE ones, in the [Google Cloud Console under Kubernetes Engine → Clusters](https://console.cloud.google.com/kubernetes/list) — GKE, EKS, and AKS clusters listed side by side, each tagged with its provider.
 
+![Google Cloud Console: advk8s-aks (Attached - AKS, eastus), advk8s-eks (Attached - EKS, us-west-2), advk8s-gke (GKE, us-central1-a), all in the dcproject-462806 fleet](screenshots/lab02-03/13-console-fleet-all-three.png)
+
 ---
 
 ## Lab summary

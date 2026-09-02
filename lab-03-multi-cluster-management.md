@@ -226,7 +226,7 @@ The same result is visible in the Cloud Console (Kubernetes Engine → Clusters)
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab02-03/`](screenshots/lab02-03/) (12 images, shared with Lab 2 — same three clusters, one continuous run)
+- Screenshots: [`screenshots/lab02-03/`](screenshots/lab02-03/) (13 images, shared with Lab 2 — same three clusters, one continuous run)
 - Logs: [`evidence/lab03-connect-gateway-aks.txt`](evidence/lab03-connect-gateway-aks.txt), [`evidence/lab03-full-fleet-connect-gateway.txt`](evidence/lab03-full-fleet-connect-gateway.txt), [`evidence/lab03-unified-multicloud-loop.txt`](evidence/lab03-unified-multicloud-loop.txt)
 
 **Day 1 continues with:** [Lab 4 — Deploying Istio and configuring traffic shaping, retries, and circuit breaking](lab-04-istio-traffic-shaping.md).

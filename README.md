@@ -58,5 +58,5 @@ lab-08-falco-runtime-security.md
 lab-09-hpa-vpa-autoscaling.md
 lab-10-cluster-autoscaler-gpu-nodepools.md
 evidence/            # captured, real command output referenced from each lab
-screenshots/          # real screenshots referenced inline from labs 1, 2, 3, 4, 5, 6, 8, 9
+screenshots/          # real screenshots referenced inline from every lab, 1 through 10
 ```

@@ -2,6 +2,8 @@
 
 **Day 2 · Security & Scaling/Optimization**
 
+> Every command below was actually run end to end against a real GKE cluster, and every screenshot is a real `screencapture` of that run.
+
 ## What you'll learn
 
 - How Workload Identity Federation lets a specific Pod act as a specific GCP service account — and, just as importantly, what identity every *other* Pod gets instead (not the node's powerful default identity, the way it used to work).
@@ -47,7 +49,10 @@ gcloud container clusters create advk8s-security \
 ```bash
 gcloud container clusters get-credentials advk8s-security --zone us-central1-a --project=$PROJECT_ID
 kubectl config rename-context gke_${PROJECT_ID}_us-central1-a_advk8s-security advk8s-security
+kubectl --context advk8s-security get nodes
 ```
+
+![Two nodes, Ready](screenshots/lab07/01-gke-nodes.png)
 
 ---
 
@@ -111,6 +116,8 @@ kubectl exec wi-test -- curl -sS -H "Metadata-Flavor: Google" \
 kubectl exec wi-test -- gcloud storage cat "${BUCKET}/test-file.txt"
 ```
 
+![Bound pod resolves to the GSA identity and reads the bucket](screenshots/lab07/02-wi-bound-success.png)
+
 **Verified result:**
 
 ```
@@ -118,6 +125,8 @@ wi-demo-gsa@YOUR_PROJECT_ID.iam.gserviceaccount.com
 
 hello from workload identity federation
 ```
+
+> **Tested gotcha:** right after creating this pod on a cluster where Workload Identity was *just* enabled (i.e., a freshly-created cluster, not one that's been running a while), the first `gcloud storage cat` call inside the pod can fail with `ERROR: gcloud crashed (MetadataServerException): The request is rejected. Please check if the metadata server is concealed.` The identity resolution itself (the `curl` to the metadata server) still succeeds and returns the correct bound GSA — only the `gcloud storage` call fails. This is a propagation delay in GKE's metadata server proxy sidecar settling in on a brand-new node, not a real configuration problem: retrying the exact same command moments later succeeds cleanly. If you hit this, wait a few seconds and retry before assuming your IAM bindings are wrong.
 
 Now the other side — a Pod using the **default, unbound** KSA:
 
@@ -139,6 +148,8 @@ kubectl exec wi-test-unbound -- curl -sS -H "Metadata-Flavor: Google" \
   "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
 kubectl exec wi-test-unbound -- gcloud storage cat "${BUCKET}/test-file.txt"
 ```
+
+![Unbound pod: placeholder identity, 403 denied](screenshots/lab07/03-wi-unbound-denied.png)
 
 **Verified result:**
 
@@ -280,6 +291,8 @@ IMAGE_BY_DIGEST="us-central1-docker.pkg.dev/${PROJECT_ID}/advk8s-images/nginx@${
 kubectl run unattested-test --image="$IMAGE" --restart=Never
 ```
 
+![Denied: Expected digest with sha256 scheme, but got tag or malformed digest](screenshots/lab07/04-binauthz-attempt1-tag.png)
+
 ```
 Error from server (VIOLATES_POLICY): ... denied by attestor ...:
 Expected digest with sha256 scheme, but got tag or malformed digest
@@ -292,6 +305,8 @@ Binary Authorization refuses tag references outright — an attestation binds to
 ```bash
 kubectl run binauthz-test --image="$IMAGE_BY_DIGEST" --restart=Never
 ```
+
+![Denied: No attestations found that were valid and signed by a key trusted by the attestor](screenshots/lab07/05-binauthz-attempt2-unattested.png)
 
 ```
 Error from server (VIOLATES_POLICY): ... denied by attestor projects/.../attestors/advk8s-attestor:
@@ -319,6 +334,8 @@ gcloud beta container binauthz attestations sign-and-create \
 kubectl run binauthz-test --image="$IMAGE_BY_DIGEST" --restart=Never
 kubectl get pod binauthz-test
 ```
+
+![Signed image: admitted, Running](screenshots/lab07/06-binauthz-attempt3-signed-running.png)
 
 **Verified result:**
 
@@ -355,5 +372,10 @@ gcloud container clusters delete advk8s-security --zone us-central1-a --project=
 ```
 
 KMS key *versions* can be scheduled for destruction (a 24-hour minimum pending-deletion window) but the keyring itself cannot be deleted — this is a deliberate, permanent GCP behavior, not a bug. An empty keyring costs nothing to leave behind.
+
+## Evidence
+
+- Screenshots: [`screenshots/lab07/`](screenshots/lab07/) (6 images)
+- Logs: [`evidence/lab07-workload-identity-federation.txt`](evidence/lab07-workload-identity-federation.txt), [`evidence/lab07-binary-authorization.txt`](evidence/lab07-binary-authorization.txt)
 
 **Next:** [Lab 8 — Implementing supply chain and runtime security controls (Falco)](lab-08-falco-runtime-security.md), or continue to [Lab 10](lab-10-cluster-autoscaler-gpu-nodepools.md) if you're doing the cloud-dependent labs back to back.

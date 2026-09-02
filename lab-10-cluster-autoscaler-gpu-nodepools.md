@@ -2,6 +2,8 @@
 
 **Day 2 · Security & Scaling/Optimization**
 
+> Every command below was actually run end to end against real GKE and EKS clusters, including a genuine GPU instance scaling from zero, and every screenshot is a real `screencapture` of that run.
+
 ## What you'll learn
 
 - How the standard Cluster Autoscaler reacts to unschedulable Pods on an existing node pool.
@@ -86,14 +88,16 @@ EOF
 
 6 replicas × 400m CPU = 2400m requested, against a node with roughly 940m allocatable CPU — about 2 pods fit per node, so all 6 need 3 nodes.
 
+![Nodes climb 1 -> 2 -> 3 as the 6 pods go Pending -> ContainerCreating -> Running](screenshots/lab10/01-ca-scaleup.png)
+
 **Verified result (live-tested):**
 
 | Time | Nodes | Pods |
 |---|---|---|
-| t+0s | 1 | 6 Pending |
+| t+20s | 1 | 6 Pending |
 | t+40s | 1 | 6 Pending |
-| t+60s | 2 | 1 ContainerCreating, 5 Pending |
-| t+80s | 2 | 3 Running, 3 Pending |
+| t+60s | 2 | 4 ContainerCreating, 2 Pending |
+| t+80s | 3 | 6 Running |
 | t+100s | 3 | 6 Running |
 
 Cluster Autoscaler scaled from 1 to its configured max of 3 nodes purely in reaction to unschedulable Pods, no manual intervention. Full data: [`evidence/lab10-cluster-autoscaler.txt`](evidence/lab10-cluster-autoscaler.txt).
@@ -128,22 +132,20 @@ spec:
 EOF
 ```
 
+![NAP created two candidate pools; the pod landed on the one that actually fits](screenshots/lab10/02-nap-scale-test.png)
+
 **Verified result (live-tested):**
 
 ```
 $ gcloud container node-pools list --cluster advk8s-autoscale
 NAME                        MACHINE_TYPE
 default-pool                e2-medium
-nap-e2-highcpu-2-1roxlloi   e2-highcpu-2   <- NAP's first candidate: 2 vCPU, doesn't actually fit a 4-CPU pod
-nap-e2-standard-8-uu1jadyd  e2-standard-8  <- fits comfortably; this is where the Pod landed
+nap-e2-highcpu-2-tcc010ja   e2-highcpu-2   <- NAP's first candidate: 2 vCPU, doesn't actually fit a 4-CPU pod
+nap-e2-standard-8-11a96bwd  e2-standard-8  <- fits comfortably; this is where the Pod landed
 
-$ kubectl get nodes -o custom-columns=NAME,POOL,ALLOCATABLE_CPU
-...default-pool-...        default-pool                 940m
-...nap-e2-highcpu-2-...     nap-e2-highcpu-2-1roxlloi    1930m   (empty, unused)
-...nap-e2-highcpu-2-...     nap-e2-highcpu-2-1roxlloi    1930m   (empty, unused)
-...nap-e2-standard--...     nap-e2-standard-8-uu1jadyd   7910m   <- Pod scheduled here
-
-Pod status: Pending -> (t+100s) ContainerCreating -> (t+120s) Running
+$ kubectl get pods -l app=nap-scale-test -o wide
+NAME                              READY   STATUS    NODE
+nap-scale-test-54cbdf754-rf72l    1/1     Running   gke-advk8s-autoscale-nap-e2-standard--86c0a724-gjdl
 ```
 
 NAP evaluated more than one candidate machine shape before landing on one that actually fits — the `e2-highcpu-2` pool it created first has only 2 vCPU, not enough for a 4-CPU request, so it isn't used, but it still exists and costs money until the ordinary idle-node scale-down logic removes it (default ~10 minutes). **This is expected NAP behavior, not a bug** — but it's worth knowing you may briefly pay for exploratory node pools during a NAP decision, especially if you're watching cost closely. Full data: [`evidence/lab10-node-auto-provisioning.txt`](evidence/lab10-node-auto-provisioning.txt).
@@ -183,14 +185,16 @@ spec:
 EOF
 ```
 
+![Warning FailedScheduling, Normal NotTriggerScaleUp -- exceeded quota: "cluster-wide"](screenshots/lab10/03-gpu-quota-wall.png)
+
 **Verified result (live-tested, real GCP project with zero project-wide GPU quota):**
 
 ```
 $ kubectl get events --sort-by='.lastTimestamp'
 Warning  FailedScheduling    0/4 nodes are available: 3 Insufficient cpu, 3 Insufficient memory,
   4 Insufficient nvidia.com/gpu. no new claims to deallocate, preemption not helpful.
-Normal   NotTriggerScaleUp   Pod didn't trigger scale-up: 2 Insufficient cpu, 2 Insufficient memory,
-  2 Insufficient nvidia.com/gpu, 1 exceeded quota: "cluster-wide", resources: cpu, memory
+Normal   NotTriggerScaleUp   Pod didn't trigger scale-up: 2 Insufficient nvidia.com/gpu,
+  1 exceeded quota: "cluster-wide", resources: cpu, memory, 2 Insufficient cpu, 2 Insufficient memory
 ```
 
 The Pod stays `Pending` indefinitely — not crashing, not retrying forever with a confusing error, just an accurate, actionable message. **This is NAP working correctly**, not failing: it identified exactly what kind of node it needed, attempted to provision it, and the underlying cloud quota is what actually blocked it. The fix lives entirely on the cloud-quota side (Console → IAM & Admin → Quotas → request an increase for the relevant GPU SKU), not anywhere in Kubernetes or NAP configuration. Full data: [`evidence/lab10-nap-gpu-quota-wall.txt`](evidence/lab10-nap-gpu-quota-wall.txt).
@@ -284,6 +288,8 @@ helm install cluster-autoscaler autoscaler/cluster-autoscaler \
 >
 > **Tested gotcha #2 — the chart's default Cluster Autoscaler image can get stuck permanently retrying APIs your cluster doesn't have.** With the chart's default image (1.35.0), the pod ran but never progressed past repeatedly failing to watch `DeviceClass`/`ResourceClaim`/`ResourceSlice` (Dynamic Resource Allocation API types not present on this EKS 1.33 cluster) — `"the server could not find the requested resource"`, forever, in a loop, never reaching the actual scale-up evaluation. Pinning `image.tag` to the release matching the cluster's Kubernetes **minor** version (`v1.33.0` for a 1.33 cluster) fixed it immediately. Cluster Autoscaler has always shipped version-matched releases for exactly this reason — "latest" is not automatically "compatible."
 
+> **Tested gotcha #3 — `AutoScalingFullAccess` alone isn't the full story.** Even with the ASG permission from gotcha #1 in place, Cluster Autoscaler's logs showed a second, different `AccessDeniedException`: `... is not authorized to perform: eks:DescribeNodegroup on resource: arn:aws:eks:.../nodegroup/advk8s-gpu-test/gpu-ng/...`. Cluster Autoscaler calls the EKS `DescribeNodegroup` API separately (on top of the ASG APIs) to pull labels and taints for **managed** node groups specifically — a permission `AutoScalingFullAccess` doesn't include. Fix: attach a small additional inline policy granting `eks:DescribeNodegroup` to the same node role. After attaching it, the error didn't clear instantly — it took roughly a minute of IAM permission propagation before a restarted Cluster Autoscaler pod stopped hitting it. If you see this specific error, the policy addition (not a Kubernetes-side fix) is what resolves it, and a short wait is normal, not a sign it didn't work.
+
 ### B.3 Request a GPU pod and watch a real node appear
 
 ```bash
@@ -333,16 +339,18 @@ Confirm the GPU is genuinely usable, not just present as a Kubernetes resource c
 kubectl exec gpu-real-test -- nvidia-smi
 ```
 
+![Real node appeared from zero; nvidia-smi confirms a genuine Tesla T4](screenshots/lab10/04-real-gpu-node.png)
+
 ```
 NVIDIA-SMI 580.178.04   Driver Version: 580.178.04   CUDA Version: 13.0
 +-----------------------------------------+------------------------+----------------------+
 | GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
 |   0  Tesla T4                       On  |   00000000:00:1E.0 Off |                    0 |
-| N/A   26C    P8              9W /   70W |       0MiB /  15360MiB |      0%      Default |
+| N/A   34C    P8              9W /   70W |       0MiB /  15360MiB |      0%      Default |
 +-----------------------------------------+------------------------+----------------------+
 ```
 
-A real NVIDIA Tesla T4, on a real EC2 instance, that did not exist until the moment a Pod asked for one. Full data including the CA scale-up decision log verbatim: [`evidence/lab10-real-gpu-eks.txt`](evidence/lab10-real-gpu-eks.txt).
+A real NVIDIA Tesla T4, on a real EC2 instance, that did not exist until the moment a Pod asked for one — confirmed both by `kubectl get nodes` showing a second node barely a minute old, and by `nvidia-smi` running successfully inside the pod on it. Full data including the CA scale-up decision log verbatim: [`evidence/lab10-real-gpu-eks.txt`](evidence/lab10-real-gpu-eks.txt).
 
 ### B.4 Clean up Part B — do this immediately, this is the expensive part
 
@@ -360,6 +368,8 @@ aws ec2 describe-instances --region us-west-2 --filters "Name=instance-type,Valu
   # should be empty
 ```
 
+![All checks empty: no GKE clusters, no EKS clusters, no running g4dn.xlarge instances](screenshots/lab10/05-teardown-verified.png)
+
 ---
 
 ## Lab summary
@@ -370,5 +380,10 @@ aws ec2 describe-instances --region us-west-2 --filters "Name=instance-type,Valu
 | NAP creates a new node pool with an appropriate machine type | ✅ e2-standard-8 auto-selected |
 | NAP + GPU: correct behavior when blocked by real cloud quota | ✅ accurate `NotTriggerScaleUp` event, Pod stays Pending |
 | A real GPU node scaling from zero and running a GPU workload | ✅ (AWS, where quota was available) |
+
+## Evidence
+
+- Screenshots: [`screenshots/lab10/`](screenshots/lab10/) (5 images)
+- Logs: [`evidence/lab10-cluster-autoscaler.txt`](evidence/lab10-cluster-autoscaler.txt), [`evidence/lab10-node-auto-provisioning.txt`](evidence/lab10-node-auto-provisioning.txt), [`evidence/lab10-nap-gpu-quota-wall.txt`](evidence/lab10-nap-gpu-quota-wall.txt), [`evidence/lab10-real-gpu-eks.txt`](evidence/lab10-real-gpu-eks.txt)
 
 **This is the end of Day 2.** If you completed all five labs, you've covered image scanning, admission control, workload identity, supply-chain attestation, runtime threat detection, and both horizontal and vertical autoscaling patterns — the security and efficiency half of running Kubernetes at scale, to go with Day 1's multi-cluster and service mesh half.
