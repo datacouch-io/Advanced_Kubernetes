@@ -1,4 +1,4 @@
-# Lab 9 — Configuring Advanced HPA/VPA Autoscaling Patterns
+# Lab 10 — Configuring Advanced HPA/VPA Autoscaling Patterns
 
 **Day 2 · Security & Scaling/Optimization**
 
@@ -11,6 +11,26 @@
 - Why VPA's `Auto` mode is deprecated, what replaced it, and the genuinely new capability (in-place resize with zero pod restarts) that makes the replacement better, not just a rename.
 - Why you generally don't point HPA and VPA at the same metric on the same workload.
 
+```mermaid
+flowchart TB
+    METRICS["metrics-server"] --> HPAC["HPA controller"]
+    METRICS --> VPAR["VPA recommender"]
+
+    subgraph HPA_FLOW["HPA: php-apache-hpa"]
+        HPAC -->|"CPU &gt; 50% target"| SCALEUP["behavior.scaleUp<br/>stabilizationWindow=0<br/>Percent 100/15s"]
+        HPAC -->|"CPU &lt; 50% target"| SCALEDOWN["behavior.scaleDown<br/>stabilizationWindow=60s<br/>Percent 50/30s"]
+        SCALEUP --> REPLICAS["Deployment replicas: 1 -&gt; 6"]
+        SCALEDOWN --> REPLICAS
+    end
+
+    subgraph VPA_FLOW["VPA: vpa-demo"]
+        VPAR -->|"Target: cpu=247m mem=250Mi"| VPAU["VPA updater<br/>updateMode: InPlaceOrRecreate"]
+        VPAU -->|"/resize subresource"| POD["Same Pod, live --<br/>RESTARTS: 0"]
+    end
+
+    HPA_FLOW -.->|"don't target the same metric on the same workload --<br/>they'll fight each other"| VPA_FLOW
+```
+
 ## Time & cost
 
 - **Time:** ~40 minutes.
@@ -22,7 +42,7 @@ Complete the [Setup Environment Guide](00-setup-environment-guide.md). You need 
 
 ---
 
-## 9.1 Create the cluster and install metrics-server
+## 10.1 Create the cluster and install metrics-server
 
 Neither HPA nor VPA can do anything without a metrics source. `kind` doesn't ship one by default:
 
@@ -43,11 +63,11 @@ Confirm it's actually reporting numbers, not just running:
 kubectl top nodes
 ```
 
-> **Tested gotcha, worth knowing about if you're doing several labs back to back:** if you're also working with a real GKE/EKS/AKS cluster in the same terminal session (e.g. doing Lab 7 in parallel), remember that `gcloud container clusters create` (and equivalents) **silently switches your `kubectl` current-context** to the new cluster the moment it finishes provisioning — even if that happens in the background while you're mid-command on a different cluster. We hit this directly: a GKE cluster finished creating in the background while working in this `kind` cluster, silently redirected `kubectl`, and several commands ran against the wrong cluster before we noticed (`kubectl config current-context` gave it away immediately). Check your context before any command whose blast radius matters, especially if you have cloud provisioning running in another terminal or background job.
+> **Tested gotcha, worth knowing about if you're doing several labs back to back:** if you're also working with a real GKE/EKS/AKS cluster in the same terminal session (e.g. doing Lab 8 in parallel), remember that `gcloud container clusters create` (and equivalents) **silently switches your `kubectl` current-context** to the new cluster the moment it finishes provisioning — even if that happens in the background while you're mid-command on a different cluster. We hit this directly: a GKE cluster finished creating in the background while working in this `kind` cluster, silently redirected `kubectl`, and several commands ran against the wrong cluster before we noticed (`kubectl config current-context` gave it away immediately). Check your context before any command whose blast radius matters, especially if you have cloud provisioning running in another terminal or background job.
 
 ---
 
-## 9.2 Advanced HPA: asymmetric scale-up/scale-down behavior
+## 10.2 Advanced HPA: asymmetric scale-up/scale-down behavior
 
 The default HPA behavior is symmetric and can flap under bursty load. Deploy a CPU-bound app:
 
@@ -120,7 +140,7 @@ Confirm the baseline before generating any load:
 kubectl get hpa php-apache-hpa
 ```
 
-![1 replica, cpu 8%/50%, well under target](screenshots/lab09/01-hpa-initial.png)
+![1 replica, cpu 8%/50%, well under target](screenshots/lab10/01-hpa-initial.png)
 
 Generate load and watch:
 
@@ -131,7 +151,7 @@ kubectl run load-generator --image=busybox --restart=Never -- \
 watch kubectl get hpa php-apache-hpa
 ```
 
-![CPU climbs to 250%, HPA drives replicas 1 -> 3 -> 5 as load settles](screenshots/lab09/02-hpa-scaleup.png)
+![CPU climbs to 250%, HPA drives replicas 1 -> 3 -> 5 as load settles](screenshots/lab10/02-hpa-scaleup.png)
 
 **Verified scale-up (live-tested):**
 
@@ -150,7 +170,7 @@ kubectl delete pod load-generator
 watch kubectl get hpa php-apache-hpa
 ```
 
-![CPU falls to 0% but replicas hold through the stabilization window, then step down](screenshots/lab09/03-hpa-scaledown.png)
+![CPU falls to 0% but replicas hold through the stabilization window, then step down](screenshots/lab10/03-hpa-scaledown.png)
 
 **Verified scale-down (live-tested):**
 
@@ -162,11 +182,11 @@ watch kubectl get hpa php-apache-hpa
 | t+80s | 0%/50% | 3 (window expired; 50%-per-30s policy: 6→3, not straight to 1) |
 | t+100s | 0%/50% | 1 (second 50% step: 3→1) |
 
-CPU dropped to 0% almost immediately, but replica count didn't move for a full 60 seconds (the stabilization window), then stepped down in controlled 50% increments rather than collapsing straight to `minReplicas`. This is the actual mechanism that prevents an HPA from flapping a workload up and down every time load has a brief dip. Full data: [`evidence/lab09-advanced-hpa-behavior.txt`](evidence/lab09-advanced-hpa-behavior.txt).
+CPU dropped to 0% almost immediately, but replica count didn't move for a full 60 seconds (the stabilization window), then stepped down in controlled 50% increments rather than collapsing straight to `minReplicas`. This is the actual mechanism that prevents an HPA from flapping a workload up and down every time load has a brief dip. Full data: [`evidence/lab10-advanced-hpa-behavior.txt`](evidence/lab10-advanced-hpa-behavior.txt).
 
 ---
 
-## 9.3 VPA: recommendations from real usage, not guesses
+## 10.3 VPA: recommendations from real usage, not guesses
 
 **Don't point VPA and HPA at the same metric on the same workload** — they can fight each other (VPA raises a CPU request, which changes what "50% utilization" means for the HPA, which changes replica count, which changes per-pod load, which changes VPA's recommendation...). Use a separate deployment:
 
@@ -229,7 +249,7 @@ Give it several minutes to build a usage history, then check:
 kubectl describe vpa vpa-demo
 ```
 
-![VPA recommendation: target cpu=247m, memory=250Mi, against pods currently requesting far less](screenshots/lab09/04-vpa-recommendation.png)
+![VPA recommendation: target cpu=247m, memory=250Mi, against pods currently requesting far less](screenshots/lab10/04-vpa-recommendation.png)
 
 **Verified result** (after ~8 minutes):
 
@@ -264,7 +284,7 @@ kubectl patch vpa vpa-demo --type=merge -p '{"spec":{"updatePolicy":{"updateMode
 kubectl get pods -l app=vpa-demo -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.spec.containers[0].resources.requests}{"\n"}{end}'
 ```
 
-![Both pods requesting cpu=100m, memory=50Mi](screenshots/lab09/05-before-resize.png)
+![Both pods requesting cpu=100m, memory=50Mi](screenshots/lab10/05-before-resize.png)
 
 Wait about a minute (the updater runs on its own reconciliation loop), then check again:
 
@@ -273,7 +293,7 @@ kubectl get pods -l app=vpa-demo
 kubectl get pods -l app=vpa-demo -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.spec.containers[0].resources.requests}{"\n"}{end}'
 ```
 
-![Same pod identities, RESTARTS: 0, requests now cpu=587m, memory=250Mi](screenshots/lab09/06-after-resize.png)
+![Same pod identities, RESTARTS: 0, requests now cpu=587m, memory=250Mi](screenshots/lab10/06-after-resize.png)
 
 **Verified result:**
 
@@ -295,13 +315,13 @@ vpa-demo-54ddbf7868-jl265   {"cpu":"587m","memory":"250Mi"}
 Event: InPlaceResizedByVPA -- "Pod was resized in place by VPA Updater."
 ```
 
-Full data: [`evidence/lab09-vpa-recommendation.txt`](evidence/lab09-vpa-recommendation.txt) and [`evidence/lab09-vpa-inplace-resize.txt`](evidence/lab09-vpa-inplace-resize.txt).
+Full data: [`evidence/lab10-vpa-recommendation.txt`](evidence/lab10-vpa-recommendation.txt) and [`evidence/lab10-vpa-inplace-resize.txt`](evidence/lab10-vpa-inplace-resize.txt).
 
 ### Optional: see the VPA object in a GUI
 
-Same [Headlamp](https://headlamp.dev/) substitution used in Lab 6 (the official Kubernetes Dashboard Helm repo is dead — see Lab 6 for the finding). Configuration → VPAs shows the same object, live:
+Same [Headlamp](https://headlamp.dev/) substitution used in Lab 7 (the official Kubernetes Dashboard Helm repo is dead — see Lab 7 for the finding). Configuration → VPAs shows the same object, live:
 
-![Headlamp: vpa-demo, namespace default, cpu 1168m, memory 250Mi, Provided: True](screenshots/lab09/07-headlamp-vpa.png)
+![Headlamp: vpa-demo, namespace default, cpu 1168m, memory 250Mi, Provided: True](screenshots/lab10/07-headlamp-vpa.png)
 
 By the time this was captured the recommender had moved further still (1168m) — the load generator was still active. The `Provided: True` column is Headlamp's rendering of the same `RecommendationProvided` condition seen in the `kubectl describe` output earlier.
 
@@ -323,11 +343,11 @@ By the time this was captured the recommender had moved further still (1168m) �
 kind delete cluster --name autoscale-lab
 ```
 
-![Cluster deleted, no kind clusters remain](screenshots/lab09/08-cleanup.png)
+![Cluster deleted, no kind clusters remain](screenshots/lab10/08-cleanup.png)
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab09/`](screenshots/lab09/) (8 images)
-- Logs: [`evidence/lab09-advanced-hpa-behavior.txt`](evidence/lab09-advanced-hpa-behavior.txt), [`evidence/lab09-vpa-recommendation.txt`](evidence/lab09-vpa-recommendation.txt), [`evidence/lab09-vpa-inplace-resize.txt`](evidence/lab09-vpa-inplace-resize.txt)
+- Screenshots: [`screenshots/lab10/`](screenshots/lab10/) (8 images)
+- Logs: [`evidence/lab10-advanced-hpa-behavior.txt`](evidence/lab10-advanced-hpa-behavior.txt), [`evidence/lab10-vpa-recommendation.txt`](evidence/lab10-vpa-recommendation.txt), [`evidence/lab10-vpa-inplace-resize.txt`](evidence/lab10-vpa-inplace-resize.txt)
 
-**Next:** [Lab 10 — Setting up Cluster Autoscaler / Node Auto-Provisioning with GPU node pools](lab-10-cluster-autoscaler-gpu-nodepools.md).
+**Next:** [Lab 11 — Setting up Cluster Autoscaler / Node Auto-Provisioning with GPU node pools](lab-11-cluster-autoscaler-gpu-nodepools.md).

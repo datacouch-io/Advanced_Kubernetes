@@ -1,4 +1,4 @@
-# Lab 2 — Configuring GKE Fleet Management with Attached AWS and Azure Clusters
+# Lab 3 — Configuring GKE Fleet Management with Attached AWS and Azure Clusters
 
 **Day 1 · Multi-Cluster & Service Mesh**
 
@@ -13,8 +13,8 @@
 ## Time & cost
 
 - **Time:** ~90 minutes, most of it waiting on cluster provisioning (EKS is the long pole, ~20-25 minutes for control plane + node group).
-- **Cost:** real. Verified during testing: **under $5 total** for one small cluster per cloud (2 nodes each — `e2-medium` on GKE, `t3.small` on EKS, `Standard_B2s` on AKS), run for roughly 1.5 hours end-to-end including [Lab 3](lab-03-multi-cluster-management.md), then deleted. Your bill scales with how long you leave clusters running — **do the teardown at the end of Lab 3, not later.**
-- **This lab and Lab 3 share the same three clusters.** Do them in the same sitting; don't tear down after Lab 2 if you're continuing to Lab 3 immediately.
+- **Cost:** real. Verified during testing: **under $5 total** for one small cluster per cloud (2 nodes each — `e2-medium` on GKE, `t3.small` on EKS, `Standard_B2s` on AKS), run for roughly 1.5 hours end-to-end including [Lab 4](lab-04-multi-cluster-management.md), then deleted. Your bill scales with how long you leave clusters running — **do the teardown at the end of Lab 4, not later.**
+- **This lab and Lab 4 share the same three clusters.** Do them in the same sitting; don't tear down after Lab 3 if you're continuing to Lab 4 immediately.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@
 
 ---
 
-## 2.1 Concepts: what is a fleet?
+## 3.1 Concepts: what is a fleet?
 
 A **fleet** is Google Cloud's grouping mechanism for a set of Kubernetes clusters — GKE or otherwise — that you want to manage, view, and apply policy to as a unit. Membership in a fleet is what unlocks:
 
@@ -39,9 +39,25 @@ Clusters join a fleet in one of two ways:
 
 This lab builds one cluster per cloud, then attaches all three to a single fleet.
 
+```mermaid
+flowchart TB
+    subgraph FLEET["dcproject-462806 fleet (GKE Hub)"]
+        direction LR
+        GKE["advk8s-gke<br/>Native member<br/>LOCATION: us-central1"]
+        EKS["advk8s-eks<br/>Attached (EKS)<br/>LOCATION: global"]
+        AKS["advk8s-aks<br/>Attached (AKS)<br/>LOCATION: global"]
+    end
+
+    GCP["GKE control plane<br/>(Google already runs this)"] -.->|"registered automatically"| GKE
+    EKSCTRL["EKS control plane<br/>(AWS-managed)"] -->|"Connect agent +<br/>OIDC issuer trust"| EKS
+    AKSCTRL["AKS control plane<br/>(Azure-managed)"] -->|"Connect agent +<br/>OIDC issuer trust"| AKS
+
+    FLEET -->|"Connect Gateway"| YOU["Your gcloud identity<br/>(one credential, all three clouds)"]
+```
+
 ---
 
-## 2.2 Provision one cluster per cloud
+## 3.2 Provision one cluster per cloud
 
 You can run these three in parallel in separate terminal tabs — there's no dependency between them, and doing so is the single biggest time-saver in this lab (EKS alone takes ~20 minutes).
 
@@ -75,7 +91,7 @@ kubectl config rename-context gke_${PROJECT_ID}_us-central1-a_advk8s-gke advk8s-
 kubectl --context advk8s-gke get nodes
 ```
 
-![Two GKE nodes, Ready](screenshots/lab02-03/01-gke-nodes.png)
+![Two GKE nodes, Ready](screenshots/lab03-04/01-gke-nodes.png)
 
 **Verified result:**
 
@@ -91,9 +107,9 @@ gke-advk8s-gke-default-pool-38edb6d7-xnb0   Ready    <none>   v1.35.7-gke.102700
 >   --gke-cluster=us-central1-a/advk8s-gke \
 >   --project=$PROJECT_ID
 > ```
-> If you try adding `--enable-workload-identity` to that command (reasonable instinct — it's the flag most docs show), expect `FAILED_PRECONDITION: Workload Identity is not enabled on your GKE cluster` unless you created the cluster with `--workload-pool=$PROJECT_ID.svc.id.goog` in the first place. Plain registration (no workload identity flag) works fine for everything this lab and Lab 3 need.
+> If you try adding `--enable-workload-identity` to that command (reasonable instinct — it's the flag most docs show), expect `FAILED_PRECONDITION: Workload Identity is not enabled on your GKE cluster` unless you created the cluster with `--workload-pool=$PROJECT_ID.svc.id.goog` in the first place. Plain registration (no workload identity flag) works fine for everything this lab and Lab 4 need.
 
-![Fleet membership created for advk8s-gke](screenshots/lab02-03/02-gke-fleet-registered.png)
+![Fleet membership created for advk8s-gke](screenshots/lab03-04/02-gke-fleet-registered.png)
 
 **Verified result:**
 
@@ -112,7 +128,7 @@ aws ec2 describe-vpcs --region us-west-2 --query 'Vpcs[].VpcId' --output text
 
 If that region is nearly full, pick another (`us-east-2`, `eu-west-1`, etc. — check each the same way).
 
-> **Tested gotcha — pick your Kubernetes version deliberately, not just "latest stable":** GKE's attached-clusters feature only supports platform versions tracking roughly the last 3 Kubernetes minors (see §2.3 below for how to check). We first created this cluster at `--version 1.31`, which was already too old to attach by the time we got to registration — `gcloud container attached get-server-config` had nothing older than `1.33.0-gke.1` available in any region we checked. We had to delete and recreate. Check the supported attached-cluster versions **before** you provision:
+> **Tested gotcha — pick your Kubernetes version deliberately, not just "latest stable":** GKE's attached-clusters feature only supports platform versions tracking roughly the last 3 Kubernetes minors (see §3.3 below for how to check). We first created this cluster at `--version 1.31`, which was already too old to attach by the time we got to registration — `gcloud container attached get-server-config` had nothing older than `1.33.0-gke.1` available in any region we checked. We had to delete and recreate. Check the supported attached-cluster versions **before** you provision:
 > ```bash
 > gcloud container attached get-server-config --location=us-central1 --project=$PROJECT_ID
 > ```
@@ -136,7 +152,7 @@ kubectl config rename-context $(kubectl config get-contexts -o name | grep advk8
 kubectl --context advk8s-eks get nodes
 ```
 
-![Two EKS nodes, Ready](screenshots/lab02-03/05-eks-nodes.png)
+![Two EKS nodes, Ready](screenshots/lab03-04/05-eks-nodes.png)
 
 **Verified result:**
 
@@ -166,7 +182,7 @@ az aks get-credentials --resource-group advk8s-rg --name advk8s-aks --overwrite-
 kubectl --context advk8s-aks get nodes
 ```
 
-![Two AKS nodes, Ready](screenshots/lab02-03/03-aks-nodes.png)
+![Two AKS nodes, Ready](screenshots/lab03-04/03-aks-nodes.png)
 
 **Verified result:**
 
@@ -194,7 +210,7 @@ You should now have three working, independent clusters and three `kubectl` cont
 
 ---
 
-## 2.3 Attach EKS and AKS to the GKE fleet
+## 3.3 Attach EKS and AKS to the GKE fleet
 
 For each non-GKE cluster you need: a Google Cloud **administrative region** for the fleet to manage it from (pick one near the cluster — this is a metadata/control location, not where workloads run), a compatible **platform version**, and the cluster's **OIDC issuer URL**.
 
@@ -237,7 +253,7 @@ gcloud container attached clusters register advk8s-aks \
   --project=$PROJECT_ID
 ```
 
-![Attached cluster describe: state RUNNING](screenshots/lab02-03/04-aks-attached.png)
+![Attached cluster describe: state RUNNING](screenshots/lab03-04/04-aks-attached.png)
 
 **Verified result:**
 
@@ -276,17 +292,17 @@ gcloud container attached clusters register advk8s-eks \
 
 This produces the same shape of output as the AKS registration above — a `RUNNING` state once the Connect agent installs and the trust relationship is established.
 
-> Match the `--platform-version` minor to the EKS cluster's actual Kubernetes minor version exactly — `gcloud` enforces "platform version cannot be newer or more than one minor version older than the Kubernetes version" and will reject an incompatible pairing outright with a clear error, which is a safe way to find the right one if you're unsure. This is also why §2.2 has you check supported versions *before* creating the EKS cluster, not after.
+> Match the `--platform-version` minor to the EKS cluster's actual Kubernetes minor version exactly — `gcloud` enforces "platform version cannot be newer or more than one minor version older than the Kubernetes version" and will reject an incompatible pairing outright with a clear error, which is a safe way to find the right one if you're unsure. This is also why §3.2 has you check supported versions *before* creating the EKS cluster, not after.
 
 ---
 
-## 2.4 Verify the fleet
+## 3.4 Verify the fleet
 
 ```bash
 gcloud container fleet memberships list --project=$PROJECT_ID
 ```
 
-![All three clusters registered to the fleet](screenshots/lab02-03/06-fleet-all-three.png)
+![All three clusters registered to the fleet](screenshots/lab03-04/06-fleet-all-three.png)
 
 **Verified result, all three clusters registered:**
 
@@ -307,7 +323,7 @@ gcloud container attached clusters describe advk8s-aks --location=us-central1 --
 
 You should also be able to see all fleet members, including native GKE ones, in the [Google Cloud Console under Kubernetes Engine → Clusters](https://console.cloud.google.com/kubernetes/list) — GKE, EKS, and AKS clusters listed side by side, each tagged with its provider.
 
-![Google Cloud Console: advk8s-aks (Attached - AKS, eastus), advk8s-eks (Attached - EKS, us-west-2), advk8s-gke (GKE, us-central1-a), all in the dcproject-462806 fleet](screenshots/lab02-03/13-console-fleet-all-three.png)
+![Google Cloud Console: advk8s-aks (Attached - AKS, eastus), advk8s-eks (Attached - EKS, us-west-2), advk8s-gke (GKE, us-central1-a), all in the dcproject-462806 fleet](screenshots/lab03-04/13-console-fleet-all-three.png)
 
 ---
 
@@ -319,11 +335,11 @@ You should also be able to see all fleet members, including native GKE ones, in 
 | `advk8s-aks` | Azure | `gcloud container attached clusters register --distribution=aks` | ✅ `STATE: RUNNING` |
 | `advk8s-eks` | AWS | `gcloud container attached clusters register --distribution=eks` | ✅ `STATE: RUNNING` |
 
-Full provisioning evidence: [`evidence/lab02-gke-eks-aks-provisioning.txt`](evidence/lab02-gke-eks-aks-provisioning.txt).
+Full provisioning evidence: [`evidence/lab03-gke-eks-aks-provisioning.txt`](evidence/lab03-gke-eks-aks-provisioning.txt).
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab02-03/`](screenshots/lab02-03/) (shared with Lab 3 — same three clusters, one continuous run)
-- Logs: [`evidence/lab02-gke-eks-aks-provisioning.txt`](evidence/lab02-gke-eks-aks-provisioning.txt)
+- Screenshots: [`screenshots/lab03-04/`](screenshots/lab03-04/) (shared with Lab 4 — same three clusters, one continuous run)
+- Logs: [`evidence/lab03-gke-eks-aks-provisioning.txt`](evidence/lab03-gke-eks-aks-provisioning.txt)
 
-**Do not tear down these clusters yet — continue directly to [Lab 3](lab-03-multi-cluster-management.md)**, which uses these same three clusters. Teardown instructions are at the end of Lab 3.
+**Do not tear down these clusters yet — continue directly to [Lab 4](lab-04-multi-cluster-management.md)**, which uses these same three clusters. Teardown instructions are at the end of Lab 4.

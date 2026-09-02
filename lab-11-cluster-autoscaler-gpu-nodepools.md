@@ -1,4 +1,4 @@
-# Lab 10 — Setting Up Cluster Autoscaler / Node Auto-Provisioning with GPU Node Pools
+# Lab 11 — Setting Up Cluster Autoscaler / Node Auto-Provisioning with GPU Node Pools
 
 **Day 2 · Security & Scaling/Optimization**
 
@@ -31,6 +31,21 @@ aws service-quotas get-service-quota --service-code ec2 --quota-code L-DB2E81BA 
 ```
 
 > **Tested finding:** in the environment this lab was built in, `gcloud compute regions describe <region>` showed per-GPU-type quotas (`NVIDIA_T4_GPUS`, `NVIDIA_L4_GPUS`, etc.) all reporting `limit: 1.0` — looking perfectly usable. The actual binding constraint was the **project-wide** `GPUS_ALL_REGIONS` quota, which was `0.0`. That field is easy to miss because it isn't shown by the regional query at all — you have to check `compute project-info describe` separately. AWS, in the same environment, had real quota (768 vCPUs for G/VT instances) with no request needed. **Check both clouds before assuming either one is blocked** — which cloud has quota varies per account and changes over time.
+
+```mermaid
+flowchart TB
+    PENDING["Unschedulable Pod"] --> DECIDE{"Cluster Autoscaler:<br/>can an existing pool fit this?"}
+    DECIDE -- "yes, same machine shape" --> CA["Standard CA<br/>scales existing pool<br/>1 -&gt; 3 nodes"]
+    DECIDE -- "no, needs a new shape<br/>(e.g. 4 CPU, or a GPU)" --> NAP["Node Auto-Provisioning<br/>picks a machine type itself"]
+
+    NAP --> TRY1["Try: e2-highcpu-2<br/>doesn't fit 4-CPU request"]
+    NAP --> TRY2["Try: e2-standard-8<br/>fits -- Pod scheduled here"]
+
+    NAP -->|"GPU requested"| QUOTA{"GPUS_ALL_REGIONS<br/>quota &gt; 0?"}
+    QUOTA -- "no (this lab's GCP project)" --> WALL["Pod stays Pending --<br/>NotTriggerScaleUp: exceeded quota"]
+    QUOTA -- "yes (this lab's AWS account)" --> REAL["Real g4dn.xlarge node<br/>scales from 0 -&gt; 1"]
+    REAL --> GPU["nvidia-smi: genuine Tesla T4"]
+```
 
 ---
 
@@ -88,7 +103,7 @@ EOF
 
 6 replicas × 400m CPU = 2400m requested, against a node with roughly 940m allocatable CPU — about 2 pods fit per node, so all 6 need 3 nodes.
 
-![Nodes climb 1 -> 2 -> 3 as the 6 pods go Pending -> ContainerCreating -> Running](screenshots/lab10/01-ca-scaleup.png)
+![Nodes climb 1 -> 2 -> 3 as the 6 pods go Pending -> ContainerCreating -> Running](screenshots/lab11/01-ca-scaleup.png)
 
 **Verified result (live-tested):**
 
@@ -100,7 +115,7 @@ EOF
 | t+80s | 3 | 6 Running |
 | t+100s | 3 | 6 Running |
 
-Cluster Autoscaler scaled from 1 to its configured max of 3 nodes purely in reaction to unschedulable Pods, no manual intervention. Full data: [`evidence/lab10-cluster-autoscaler.txt`](evidence/lab10-cluster-autoscaler.txt).
+Cluster Autoscaler scaled from 1 to its configured max of 3 nodes purely in reaction to unschedulable Pods, no manual intervention. Full data: [`evidence/lab11-cluster-autoscaler.txt`](evidence/lab11-cluster-autoscaler.txt).
 
 ```bash
 kubectl delete deployment ca-scale-test
@@ -132,7 +147,7 @@ spec:
 EOF
 ```
 
-![NAP created two candidate pools; the pod landed on the one that actually fits](screenshots/lab10/02-nap-scale-test.png)
+![NAP created two candidate pools; the pod landed on the one that actually fits](screenshots/lab11/02-nap-scale-test.png)
 
 **Verified result (live-tested):**
 
@@ -148,7 +163,7 @@ NAME                              READY   STATUS    NODE
 nap-scale-test-54cbdf754-rf72l    1/1     Running   gke-advk8s-autoscale-nap-e2-standard--86c0a724-gjdl
 ```
 
-NAP evaluated more than one candidate machine shape before landing on one that actually fits — the `e2-highcpu-2` pool it created first has only 2 vCPU, not enough for a 4-CPU request, so it isn't used, but it still exists and costs money until the ordinary idle-node scale-down logic removes it (default ~10 minutes). **This is expected NAP behavior, not a bug** — but it's worth knowing you may briefly pay for exploratory node pools during a NAP decision, especially if you're watching cost closely. Full data: [`evidence/lab10-node-auto-provisioning.txt`](evidence/lab10-node-auto-provisioning.txt).
+NAP evaluated more than one candidate machine shape before landing on one that actually fits — the `e2-highcpu-2` pool it created first has only 2 vCPU, not enough for a 4-CPU request, so it isn't used, but it still exists and costs money until the ordinary idle-node scale-down logic removes it (default ~10 minutes). **This is expected NAP behavior, not a bug** — but it's worth knowing you may briefly pay for exploratory node pools during a NAP decision, especially if you're watching cost closely. Full data: [`evidence/lab11-node-auto-provisioning.txt`](evidence/lab11-node-auto-provisioning.txt).
 
 ### A.4 What happens when NAP hits a quota wall
 
@@ -185,7 +200,7 @@ spec:
 EOF
 ```
 
-![Warning FailedScheduling, Normal NotTriggerScaleUp -- exceeded quota: "cluster-wide"](screenshots/lab10/03-gpu-quota-wall.png)
+![Warning FailedScheduling, Normal NotTriggerScaleUp -- exceeded quota: "cluster-wide"](screenshots/lab11/03-gpu-quota-wall.png)
 
 **Verified result (live-tested, real GCP project with zero project-wide GPU quota):**
 
@@ -197,7 +212,7 @@ Normal   NotTriggerScaleUp   Pod didn't trigger scale-up: 2 Insufficient nvidia.
   1 exceeded quota: "cluster-wide", resources: cpu, memory, 2 Insufficient cpu, 2 Insufficient memory
 ```
 
-The Pod stays `Pending` indefinitely — not crashing, not retrying forever with a confusing error, just an accurate, actionable message. **This is NAP working correctly**, not failing: it identified exactly what kind of node it needed, attempted to provision it, and the underlying cloud quota is what actually blocked it. The fix lives entirely on the cloud-quota side (Console → IAM & Admin → Quotas → request an increase for the relevant GPU SKU), not anywhere in Kubernetes or NAP configuration. Full data: [`evidence/lab10-nap-gpu-quota-wall.txt`](evidence/lab10-nap-gpu-quota-wall.txt).
+The Pod stays `Pending` indefinitely — not crashing, not retrying forever with a confusing error, just an accurate, actionable message. **This is NAP working correctly**, not failing: it identified exactly what kind of node it needed, attempted to provision it, and the underlying cloud quota is what actually blocked it. The fix lives entirely on the cloud-quota side (Console → IAM & Admin → Quotas → request an increase for the relevant GPU SKU), not anywhere in Kubernetes or NAP configuration. Full data: [`evidence/lab11-nap-gpu-quota-wall.txt`](evidence/lab11-nap-gpu-quota-wall.txt).
 
 ```bash
 kubectl delete deployment gpu-scale-test nap-scale-test
@@ -277,7 +292,7 @@ helm install cluster-autoscaler autoscaler/cluster-autoscaler \
   --set image.tag=v1.33.0
 ```
 
-> This IAM approach (attaching a broad policy directly to the node role) is simplified for lab purposes — a production setup should scope the policy narrowly and use IRSA (IAM Roles for Service Accounts), the same identity-scoping principle Lab 7 teaches for GKE Workload Identity.
+> This IAM approach (attaching a broad policy directly to the node role) is simplified for lab purposes — a production setup should scope the policy narrowly and use IRSA (IAM Roles for Service Accounts), the same identity-scoping principle Lab 8 teaches for GKE Workload Identity.
 
 > **Tested gotcha #1 — attach the IAM policy to the role of the node group that will actually *run* Cluster Autoscaler, not the node group you're trying to scale.** We first attached the policy to `gpu-ng`'s role (it seemed like the obvious target — that's the group being scaled). The CA pod, however, schedules onto whatever nodes already exist — at this point, only `cpu-ng`. Result:
 > ```
@@ -339,7 +354,7 @@ Confirm the GPU is genuinely usable, not just present as a Kubernetes resource c
 kubectl exec gpu-real-test -- nvidia-smi
 ```
 
-![Real node appeared from zero; nvidia-smi confirms a genuine Tesla T4](screenshots/lab10/04-real-gpu-node.png)
+![Real node appeared from zero; nvidia-smi confirms a genuine Tesla T4](screenshots/lab11/04-real-gpu-node.png)
 
 ```
 NVIDIA-SMI 580.178.04   Driver Version: 580.178.04   CUDA Version: 13.0
@@ -350,7 +365,7 @@ NVIDIA-SMI 580.178.04   Driver Version: 580.178.04   CUDA Version: 13.0
 +-----------------------------------------+------------------------+----------------------+
 ```
 
-A real NVIDIA Tesla T4, on a real EC2 instance, that did not exist until the moment a Pod asked for one — confirmed both by `kubectl get nodes` showing a second node barely a minute old, and by `nvidia-smi` running successfully inside the pod on it. Full data including the CA scale-up decision log verbatim: [`evidence/lab10-real-gpu-eks.txt`](evidence/lab10-real-gpu-eks.txt).
+A real NVIDIA Tesla T4, on a real EC2 instance, that did not exist until the moment a Pod asked for one — confirmed both by `kubectl get nodes` showing a second node barely a minute old, and by `nvidia-smi` running successfully inside the pod on it. Full data including the CA scale-up decision log verbatim: [`evidence/lab11-real-gpu-eks.txt`](evidence/lab11-real-gpu-eks.txt).
 
 ### B.4 Clean up Part B — do this immediately, this is the expensive part
 
@@ -368,7 +383,7 @@ aws ec2 describe-instances --region us-west-2 --filters "Name=instance-type,Valu
   # should be empty
 ```
 
-![All checks empty: no GKE clusters, no EKS clusters, no running g4dn.xlarge instances](screenshots/lab10/05-teardown-verified.png)
+![All checks empty: no GKE clusters, no EKS clusters, no running g4dn.xlarge instances](screenshots/lab11/05-teardown-verified.png)
 
 ---
 
@@ -383,7 +398,9 @@ aws ec2 describe-instances --region us-west-2 --filters "Name=instance-type,Valu
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab10/`](screenshots/lab10/) (5 images)
-- Logs: [`evidence/lab10-cluster-autoscaler.txt`](evidence/lab10-cluster-autoscaler.txt), [`evidence/lab10-node-auto-provisioning.txt`](evidence/lab10-node-auto-provisioning.txt), [`evidence/lab10-nap-gpu-quota-wall.txt`](evidence/lab10-nap-gpu-quota-wall.txt), [`evidence/lab10-real-gpu-eks.txt`](evidence/lab10-real-gpu-eks.txt)
+- Screenshots: [`screenshots/lab11/`](screenshots/lab11/) (5 images)
+- Logs: [`evidence/lab11-cluster-autoscaler.txt`](evidence/lab11-cluster-autoscaler.txt), [`evidence/lab11-node-auto-provisioning.txt`](evidence/lab11-node-auto-provisioning.txt), [`evidence/lab11-nap-gpu-quota-wall.txt`](evidence/lab11-nap-gpu-quota-wall.txt), [`evidence/lab11-real-gpu-eks.txt`](evidence/lab11-real-gpu-eks.txt)
 
 **This is the end of Day 2.** If you completed all five labs, you've covered image scanning, admission control, workload identity, supply-chain attestation, runtime threat detection, and both horizontal and vertical autoscaling patterns — the security and efficiency half of running Kubernetes at scale, to go with Day 1's multi-cluster and service mesh half.
+
+**Next:** [Lab 12 — Setting up a Kubeflow pipeline for distributed training](lab-12-kubeflow-distributed-training.md), the start of Day 3.

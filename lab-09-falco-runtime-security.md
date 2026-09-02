@@ -1,4 +1,4 @@
-# Lab 8 — Implementing Supply Chain and Runtime Security Controls (Falco)
+# Lab 9 — Implementing Supply Chain and Runtime Security Controls (Falco)
 
 **Day 2 · Security & Scaling/Optimization**
 
@@ -6,7 +6,7 @@
 
 ## What you'll learn
 
-- What Falco actually watches (kernel syscalls, via eBPF) and why that makes it fundamentally different from the admission-time controls in Lab 6 — Falco catches things *happening inside a running container*, not just bad configuration at deploy time.
+- What Falco actually watches (kernel syscalls, via eBPF) and why that makes it fundamentally different from the admission-time controls in Lab 7 — Falco catches things *happening inside a running container*, not just bad configuration at deploy time.
 - Reading a real Falco alert and understanding what each field tells you.
 - Writing and deploying a custom detection rule.
 
@@ -23,21 +23,40 @@ Complete the [Setup Environment Guide](00-setup-environment-guide.md). You need 
 
 ---
 
-## 8.1 Why this is a different layer than Lab 6
+## 9.1 Why this is a different layer than Lab 7
 
-Lab 6 (Kyverno) is an **admission controller** — it inspects a Pod spec before the Pod is allowed to exist, and it can only reason about what's declared in that spec. It has no idea what a container actually *does* once it's running.
+Lab 7 (Kyverno) is an **admission controller** — it inspects a Pod spec before the Pod is allowed to exist, and it can only reason about what's declared in that spec. It has no idea what a container actually *does* once it's running.
 
 Falco is a **runtime security** tool. It taps directly into the kernel via eBPF and watches actual syscalls as they happen — file opens, process launches, network connections — regardless of whether anything about them looks wrong in a YAML file. This is what catches things like:
 
 - A container reading `/etc/shadow` when nothing about its declared spec suggested it would.
-- A process being installed and executed *after* the container already started (Lab 6's image scan happened before the container ever ran — it can't see this).
+- A process being installed and executed *after* the container already started (Lab 7's image scan happened before the container ever ran — it can't see this).
 - A shell being spawned inside a container that's supposed to be a stateless web server with no interactive use case at all.
 
 The two layers are complementary, not competing: admission control stops bad configurations from ever running; runtime security catches bad *behavior* in configurations that looked completely fine at admission time.
 
+```mermaid
+flowchart LR
+    subgraph NODE["kind node"]
+        CONTAINER["alpine-test container"]
+        SYSCALL["Kernel syscalls<br/>(open, exec, connect)"]
+        EBPF["modern_ebpf probe<br/>(Falco DaemonSet)"]
+        CONTAINER --> SYSCALL --> EBPF
+    end
+
+    EBPF --> ENGINE["Falco rules engine"]
+    ENGINE -->|"built-in: Sensitive file opened"| A1["cat /etc/shadow"]
+    ENGINE -->|"built-in: EXE_WRITABLE + EXE_UPPER_LAYER"| A2["apk add netcat-openbsd; nc -h"]
+    ENGINE -->|"custom: Canary File Accessed"| A3["cat /etc/canary-do-not-read.txt"]
+
+    A1 & A2 & A3 --> ALERT["Alert: process, parent,<br/>command, container, k8s pod/ns"]
+```
+
+Contrast this with Lab 7: Kyverno's admission webhook only ever sees the Pod *spec* you submit, once, before creation. Falco sees everything the container's processes actually *do*, continuously, for the life of the container — including things (like a binary installed live, after startup) that no spec could ever have declared one way or the other.
+
 ---
 
-## 8.2 Install Falco
+## 9.2 Install Falco
 
 ```bash
 kind create cluster --name falco-lab
@@ -71,7 +90,7 @@ kubectl get pods -n falco
 
 ---
 
-## 8.3 Trigger a real, built-in detection
+## 9.3 Trigger a real, built-in detection
 
 Deploy a plain container to poke at:
 
@@ -86,7 +105,7 @@ Do something that looks exactly like early-stage reconnaissance after a compromi
 kubectl exec alpine-test -- cat /etc/shadow
 ```
 
-![Triggering the read](screenshots/lab08/01-sensitive-file-trigger.png)
+![Triggering the read](screenshots/lab09/01-sensitive-file-trigger.png)
 
 Check Falco's logs:
 
@@ -94,7 +113,7 @@ Check Falco's logs:
 kubectl logs -n falco -l app.kubernetes.io/name=falco -c falco --tail=20
 ```
 
-![Warning: Sensitive file opened for reading by non-trusted program](screenshots/lab08/02-sensitive-file-alert.png)
+![Warning: Sensitive file opened for reading by non-trusted program](screenshots/lab09/02-sensitive-file-alert.png)
 
 **Verified result:**
 
@@ -109,7 +128,7 @@ Notice how much context is in a single alert: which file, which process, its par
 
 ---
 
-## 8.4 Trigger a second built-in detection: runtime tampering
+## 9.4 Trigger a second built-in detection: runtime tampering
 
 This one is worth doing deliberately because the *reason* it fires is the actual lesson:
 
@@ -117,13 +136,13 @@ This one is worth doing deliberately because the *reason* it fires is the actual
 kubectl exec alpine-test -- sh -c "apk add --no-cache netcat-openbsd; nc -h"
 ```
 
-![Installing netcat live into the running container](screenshots/lab08/03-runtime-install-trigger.png)
+![Installing netcat live into the running container](screenshots/lab09/03-runtime-install-trigger.png)
 
 ```bash
 kubectl logs -n falco -l app.kubernetes.io/name=falco -c falco --tail=30 | grep -i "not part of base"
 ```
 
-![Critical: Executing binary not part of base image -- exe_flags=EXE_WRITABLE|EXE_UPPER_LAYER](screenshots/lab08/04-runtime-tampering-alert.png)
+![Critical: Executing binary not part of base image -- exe_flags=EXE_WRITABLE|EXE_UPPER_LAYER](screenshots/lab09/04-runtime-tampering-alert.png)
 
 **Verified result:**
 
@@ -133,11 +152,11 @@ Critical Executing binary not part of base image | proc_exe=nc
   container_name=alpine-test container_image_repository=docker.io/library/alpine
 ```
 
-`alpine:3.20` doesn't ship `netcat-openbsd` — we installed it live, after the container was already running. Falco's `EXE_WRITABLE|EXE_UPPER_LAYER` flags tell you exactly why it's suspicious: the binary that just executed lives in the container's **writable overlay layer**, not the read-only image layer it was built from. A legitimate process in a well-built image never needs to do this. An attacker who's gained code execution and wants a foothold (a reverse shell tool, a port scanner, a crypto miner) very often does exactly this. This is a detection Lab 6's image scan structurally cannot produce — the scan runs against the image, and this behavior only exists once the container is a running, mutated instance of it.
+`alpine:3.20` doesn't ship `netcat-openbsd` — we installed it live, after the container was already running. Falco's `EXE_WRITABLE|EXE_UPPER_LAYER` flags tell you exactly why it's suspicious: the binary that just executed lives in the container's **writable overlay layer**, not the read-only image layer it was built from. A legitimate process in a well-built image never needs to do this. An attacker who's gained code execution and wants a foothold (a reverse shell tool, a port scanner, a crypto miner) very often does exactly this. This is a detection Lab 7's image scan structurally cannot produce — the scan runs against the image, and this behavior only exists once the container is a running, mutated instance of it.
 
 ---
 
-## 8.5 Write your own rule
+## 9.5 Write your own rule
 
 Falco's built-in rule set is large but general-purpose. Real deployments almost always add rules specific to what a given workload should never do. Here's a simple, high-signal one — a canary (decoy) file that no legitimate process has any reason to ever touch:
 
@@ -172,13 +191,13 @@ kubectl exec alpine-test -- sh -c "echo secret > /etc/canary-do-not-read.txt"
 kubectl exec alpine-test -- cat /etc/canary-do-not-read.txt
 ```
 
-![Triggering the canary read](screenshots/lab08/05-canary-trigger.png)
+![Triggering the canary read](screenshots/lab09/05-canary-trigger.png)
 
 ```bash
 kubectl logs -n falco -l app.kubernetes.io/name=falco -c falco --tail=10
 ```
 
-![Critical: Canary file was read](screenshots/lab08/06-canary-alert.png)
+![Critical: Canary file was read](screenshots/lab09/06-canary-alert.png)
 
 **Verified result:**
 
@@ -187,9 +206,9 @@ Critical Canary file was read (user=root command=cat /etc/canary-do-not-read.txt
   container_name=alpine-test image=docker.io/library/alpine)
 ```
 
-> **Tested gotcha:** an earlier version of this rule targeted `nc`/`ncat`/`netcat` process execution (`spawned_process and container and proc.name = "nc"` etc.). It loaded with no schema errors — Falco's startup log confirmed `schema validation: ok` — but never actually fired, even though the exact same `nc` execution was independently confirmed by the built-in "not part of base image" rule in §8.4. We were not able to conclusively root-cause why that specific condition shape didn't trigger. Rephrasing the rule around a different event class (`open_read`/`fd.name`, as above) instead of `spawned_process`/`proc.name` worked immediately and reliably. **If your own custom rule loads cleanly but silently never fires, don't assume your YAML is broken — try restructuring the condition around a different event type before you spend a long time debugging syntax that was never the problem.**
+> **Tested gotcha:** an earlier version of this rule targeted `nc`/`ncat`/`netcat` process execution (`spawned_process and container and proc.name = "nc"` etc.). It loaded with no schema errors — Falco's startup log confirmed `schema validation: ok` — but never actually fired, even though the exact same `nc` execution was independently confirmed by the built-in "not part of base image" rule in §9.4. We were not able to conclusively root-cause why that specific condition shape didn't trigger. Rephrasing the rule around a different event class (`open_read`/`fd.name`, as above) instead of `spawned_process`/`proc.name` worked immediately and reliably. **If your own custom rule loads cleanly but silently never fires, don't assume your YAML is broken — try restructuring the condition around a different event type before you spend a long time debugging syntax that was never the problem.**
 
-Full evidence for this lab, including the failed rule attempt in full: [`evidence/lab08-falco-runtime-security.txt`](evidence/lab08-falco-runtime-security.txt).
+Full evidence for this lab, including the failed rule attempt in full: [`evidence/lab09-falco-runtime-security.txt`](evidence/lab09-falco-runtime-security.txt).
 
 ---
 
@@ -207,11 +226,11 @@ Full evidence for this lab, including the failed rule attempt in full: [`evidenc
 kind delete cluster --name falco-lab
 ```
 
-![Cluster deleted](screenshots/lab08/07-cleanup.png)
+![Cluster deleted](screenshots/lab09/07-cleanup.png)
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab08/`](screenshots/lab08/) (7 images)
-- Logs: [`evidence/lab08-falco-runtime-security.txt`](evidence/lab08-falco-runtime-security.txt)
+- Screenshots: [`screenshots/lab09/`](screenshots/lab09/) (7 images)
+- Logs: [`evidence/lab09-falco-runtime-security.txt`](evidence/lab09-falco-runtime-security.txt)
 
-**Next:** [Lab 9 — Configuring advanced HPA/VPA autoscaling patterns](lab-09-hpa-vpa-autoscaling.md).
+**Next:** [Lab 10 — Configuring advanced HPA/VPA autoscaling patterns](lab-10-hpa-vpa-autoscaling.md).

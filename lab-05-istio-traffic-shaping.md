@@ -1,4 +1,4 @@
-# Lab 4 — Deploying Istio and Configuring Traffic Shaping, Retries, and Circuit Breaking
+# Lab 5 — Deploying Istio and Configuring Traffic Shaping, Retries, and Circuit Breaking
 
 **Day 1 · Multi-Cluster & Service Mesh**
 
@@ -11,6 +11,23 @@
 - Configuring retries — and the difference between a retry that actually helps and one that only *looks* like it should.
 - Configuring circuit breaking with connection-pool limits and outlier detection, and proving it trips under load.
 
+```mermaid
+flowchart LR
+    FORTIO["fortio<br/>(client sidecar)"] -->|"90%"| HV1["helloworld v1<br/>(sidecar)"]
+    FORTIO -->|"10%"| HV2["helloworld v2<br/>(sidecar)"]
+    FORTIO -->|"load"| HB["httpbin<br/>(sidecar)"]
+
+    VS["VirtualService: helloworld<br/>weight 90/10"] -.->|"configures"| FORTIO
+    DR["DestinationRule: httpbin<br/>maxConnections=1, outlierDetection"] -.->|"configures"| HB
+
+    ISTIOD["istiod (control plane)"] -->|"pushes config"| FORTIO
+    ISTIOD --> HV1
+    ISTIOD --> HV2
+    ISTIOD --> HB
+
+    HB -- "3x over pool limit --&gt; 503 from sidecar itself" --> FORTIO
+```
+
 ## Time & cost
 
 - **Time:** ~60 minutes.
@@ -20,11 +37,11 @@
 
 Complete the [Setup Environment Guide](00-setup-environment-guide.md). You need `docker`, `kind`, `kubectl`, and `istioctl` verified working.
 
-**Keep this cluster running after this lab** — [Lab 5](lab-05-service-mesh-mtls.md) builds directly on top of it.
+**Keep this cluster running after this lab** — [Lab 6](lab-06-service-mesh-mtls.md) builds directly on top of it.
 
 ---
 
-## 4.1 Create the cluster and install Istio
+## 5.1 Create the cluster and install Istio
 
 ```bash
 kind create cluster --name istio-lab
@@ -61,7 +78,7 @@ Open `http://localhost:20001/kiali` in a browser.
 
 > **Tested gotcha:** installing Kiali via the `kiali-server` Helm chart does **not** automatically find Prometheus, even installed into the same namespace — the graph view shows "Metrics are disabled: Graph requires a metrics store (Prometheus) to be enabled" until you explicitly pass `--set external_services.prometheus.url=http://prometheus.istio-system:9090` on install. Installing Prometheus alone isn't enough. Istio's own `samples/addons/prometheus.yaml` (used above) is what creates a service literally named `prometheus` on port `9090` in `istio-system` — match your own Prometheus install's namespace/service/port if you used something else.
 
-## 4.2 Enable sidecar injection and deploy the demo apps
+## 5.2 Enable sidecar injection and deploy the demo apps
 
 ```bash
 kubectl create namespace demo
@@ -160,7 +177,7 @@ Confirm sidecar injection actually happened — every pod should show **2/2** co
 kubectl get pods -n demo
 ```
 
-![All demo pods showing 2/2 -- sidecars injected](screenshots/lab04-05/01-sidecars-injected.png)
+![All demo pods showing 2/2 -- sidecars injected](screenshots/lab05-06/01-sidecars-injected.png)
 
 ```
 NAME                             READY   STATUS    RESTARTS   AGE
@@ -178,7 +195,7 @@ FORTIO_POD=$(kubectl get pod -n demo -l app=fortio -o jsonpath='{.items[0].metad
 
 ---
 
-## 4.3 Traffic shifting (weighted canary routing)
+## 5.3 Traffic shifting (weighted canary routing)
 
 Deploy two versions of a second service, `helloworld`:
 
@@ -275,7 +292,7 @@ for i in $(seq 1 30); do
 done | grep -o "Hello version: v[12]" | sort | uniq -c
 ```
 
-![27 v1, 3 v2 -- a near-exact 90/10 split](screenshots/lab04-05/02-traffic-split-90-10.png)
+![27 v1, 3 v2 -- a near-exact 90/10 split](screenshots/lab05-06/02-traffic-split-90-10.png)
 
 **Verified result:**
 
@@ -284,19 +301,19 @@ done | grep -o "Hello version: v[12]" | sort | uniq -c
    3 Hello version: v2
 ```
 
-Full data: [`evidence/lab04-traffic-shifting.txt`](evidence/lab04-traffic-shifting.txt).
+Full data: [`evidence/lab05-traffic-shifting.txt`](evidence/lab05-traffic-shifting.txt).
 
 27/30 and 3/30 — a near-exact match for the configured 90/10 split. This is the mechanism behind canary releases and blue/green rollouts: shift the `weight` gradually (90/10 → 50/50 → 0/100) while watching error rates and latency, with zero client-side changes.
 
 **The same split, seen live in Kiali** (Traffic Graph, `demo` namespace, real Prometheus-backed metrics — not a mockup):
 
-![Kiali graph: fortio splitting traffic to helloworld v1 and v2, httpbin below](screenshots/lab04-05/03-kiali-traffic-graph.png)
+![Kiali graph: fortio splitting traffic to helloworld v1 and v2, httpbin below](screenshots/lab05-06/03-kiali-traffic-graph.png)
 
 The graph shows exactly what the CLI count showed: two edges out of `helloworld` to `v1` and `v2`, and the real-time rate panel confirms live traffic, not a static diagram.
 
 ---
 
-## 4.4 Retries — and a caveat that trips people up
+## 5.4 Retries — and a caveat that trips people up
 
 ### The wrong way to "prove" retries work
 
@@ -337,7 +354,7 @@ If retries were actually re-driving the fault, 3 retries against an independent 
 
 **Verified result (fault only, no retries):** `Code 200 : 48 (48.0 %)`, `Code 503 : 52 (52.0 %)`.
 
-57% vs 48% — essentially the same. **Istio's fault-injection `abort` is not retried**, even with a matching `retryOn: 5xx` policy on the same route. It's generated by Envoy's fault filter before the request reaches the retry-eligible path to the upstream cluster. This is documented Istio/Envoy behavior, but it's an easy trap to fall into when building a demo — full data in [`evidence/lab04-retries-fault-injection-caveat.txt`](evidence/lab04-retries-fault-injection-caveat.txt).
+57% vs 48% — essentially the same. **Istio's fault-injection `abort` is not retried**, even with a matching `retryOn: 5xx` policy on the same route. It's generated by Envoy's fault filter before the request reaches the retry-eligible path to the upstream cluster. This is documented Istio/Envoy behavior, but it's an easy trap to fall into when building a demo — full data in [`evidence/lab05-retries-fault-injection-caveat.txt`](evidence/lab05-retries-fault-injection-caveat.txt).
 
 ### The right way: retry against a real failure
 
@@ -415,11 +432,11 @@ grep -E "Code 200|Code 503" /tmp/with-retry.log
 
 **Verified result:** `Code 200 : 784 (100.0 %)` — zero failures, identical disruption.
 
-Full data: [`evidence/lab04-retries-pod-disruption.txt`](evidence/lab04-retries-pod-disruption.txt). This is the honest, reproducible version of "retries mask transient failures" — pod restarts and rolling deployments, not synthetic fault injection.
+Full data: [`evidence/lab05-retries-pod-disruption.txt`](evidence/lab05-retries-pod-disruption.txt). This is the honest, reproducible version of "retries mask transient failures" — pod restarts and rolling deployments, not synthetic fault injection.
 
 ---
 
-## 4.5 Circuit breaking
+## 5.5 Circuit breaking
 
 Circuit breaking has two independent halves in Istio: **connection pool limits** (reject/queue past a hard cap — always-on, deterministic) and **outlier detection** (eject an endpoint that's already returning errors — reactive, probabilistic). We'll configure both tightly enough to trip on a single laptop's worth of load.
 
@@ -464,7 +481,7 @@ kubectl exec -n demo "$FORTIO_POD" -c fortio -- \
   fortio load -c 3 -qps 0 -n 100 -loglevel warning http://httpbin:8000/get
 ```
 
-![100% success within the pool limit; 63% rejected once concurrency exceeds it](screenshots/lab04-05/04-circuit-breaking.png)
+![100% success within the pool limit; 63% rejected once concurrency exceeds it](screenshots/lab05-06/04-circuit-breaking.png)
 
 **Verified result:**
 
@@ -474,7 +491,7 @@ Code 200 : 37 (37.0 %)
 Code 503 : 63 (63.0 %)
 ```
 
-63% of requests were rejected by the sidecar itself — never reaching httpbin — the moment concurrency exceeded the configured pool. The socket churn (65 instead of a clean 3) is outlier detection actively ejecting and re-admitting the endpoint as it flips between "healthy" and "ejected." Full data: [`evidence/lab04-circuit-breaking.txt`](evidence/lab04-circuit-breaking.txt).
+63% of requests were rejected by the sidecar itself — never reaching httpbin — the moment concurrency exceeded the configured pool. The socket churn (65 instead of a clean 3) is outlier detection actively ejecting and re-admitting the endpoint as it flips between "healthy" and "ejected." Full data: [`evidence/lab05-circuit-breaking.txt`](evidence/lab05-circuit-breaking.txt).
 
 This is the mechanism that stops one slow or failing downstream service from exhausting a caller's connections and taking the whole call chain down with it — the core promise of a circuit breaker, enforced entirely in the sidecar with no application code changes.
 
@@ -490,10 +507,10 @@ This is the mechanism that stops one slow or failing downstream service from exh
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab04-05/`](screenshots/lab04-05/) (9 images, shared with Lab 5 — same cluster, one continuous run)
-- Logs: [`evidence/lab04-traffic-shifting.txt`](evidence/lab04-traffic-shifting.txt), [`evidence/lab04-retries-fault-injection-caveat.txt`](evidence/lab04-retries-fault-injection-caveat.txt), [`evidence/lab04-retries-pod-disruption.txt`](evidence/lab04-retries-pod-disruption.txt), [`evidence/lab04-circuit-breaking.txt`](evidence/lab04-circuit-breaking.txt)
+- Screenshots: [`screenshots/lab05-06/`](screenshots/lab05-06/) (9 images, shared with Lab 6 — same cluster, one continuous run)
+- Logs: [`evidence/lab05-traffic-shifting.txt`](evidence/lab05-traffic-shifting.txt), [`evidence/lab05-retries-fault-injection-caveat.txt`](evidence/lab05-retries-fault-injection-caveat.txt), [`evidence/lab05-retries-pod-disruption.txt`](evidence/lab05-retries-pod-disruption.txt), [`evidence/lab05-circuit-breaking.txt`](evidence/lab05-circuit-breaking.txt)
 
-**Keep this cluster running.** Continue to [Lab 5 — Service Mesh mTLS](lab-05-service-mesh-mtls.md), which builds directly on the `demo` namespace and workloads from this lab.
+**Keep this cluster running.** Continue to [Lab 6 — Service Mesh mTLS](lab-06-service-mesh-mtls.md), which builds directly on the `demo` namespace and workloads from this lab.
 
 If you need to tear down instead:
 

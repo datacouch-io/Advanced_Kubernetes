@@ -1,4 +1,4 @@
-# Lab 7 — Configuring GKE Workload Identity Federation and Binary Authorization
+# Lab 8 — Configuring GKE Workload Identity Federation and Binary Authorization
 
 **Day 2 · Security & Scaling/Optimization**
 
@@ -25,7 +25,7 @@ gcloud components install beta
 
 ---
 
-## 7.1 Create the cluster
+## 8.1 Create the cluster
 
 ```bash
 export PROJECT_ID=YOUR_GCP_PROJECT_ID
@@ -52,7 +52,7 @@ kubectl config rename-context gke_${PROJECT_ID}_us-central1-a_advk8s-security ad
 kubectl --context advk8s-security get nodes
 ```
 
-![Two nodes, Ready](screenshots/lab07/01-gke-nodes.png)
+![Two nodes, Ready](screenshots/lab08/01-gke-nodes.png)
 
 ---
 
@@ -61,6 +61,22 @@ kubectl --context advk8s-security get nodes
 ### A.1 Concepts, briefly
 
 Before Workload Identity, every Pod on a GKE node inherited that **node's** default compute service account — meaning any workload on the node could reach anything that node's identity could reach, whether or not it needed to. Workload Identity Federation replaces this with a mapping: a specific **Kubernetes ServiceAccount (KSA)** is bound to a specific **Google service account (GSA)**, and only Pods using that exact KSA get that GSA's permissions. Every other Pod gets no usable cloud identity at all.
+
+```mermaid
+flowchart LR
+    subgraph BOUND["Pod: wi-test"]
+        KSA1["KSA: wi-demo-ksa<br/>annotated with GSA email"]
+    end
+    subgraph UNBOUND["Pod: wi-test-unbound"]
+        KSA2["KSA: default<br/>(no annotation)"]
+    end
+
+    KSA1 -->|"roles/iam.workloadIdentityUser"| GSA["GSA: wi-demo-gsa<br/>roles/storage.objectViewer"]
+    GSA --> BUCKET["GCS bucket<br/>test-file.txt"]
+
+    KSA2 -.->|"no binding exists"| PLACEHOLDER["PROJECT_ID.svc.id.goog<br/>(not a usable identity)"]
+    PLACEHOLDER -- "403: does not have<br/>storage.objects.get access" --> BUCKET
+```
 
 ### A.2 Create and bind the identities
 
@@ -116,7 +132,7 @@ kubectl exec wi-test -- curl -sS -H "Metadata-Flavor: Google" \
 kubectl exec wi-test -- gcloud storage cat "${BUCKET}/test-file.txt"
 ```
 
-![Bound pod resolves to the GSA identity and reads the bucket](screenshots/lab07/02-wi-bound-success.png)
+![Bound pod resolves to the GSA identity and reads the bucket](screenshots/lab08/02-wi-bound-success.png)
 
 **Verified result:**
 
@@ -149,7 +165,7 @@ kubectl exec wi-test-unbound -- curl -sS -H "Metadata-Flavor: Google" \
 kubectl exec wi-test-unbound -- gcloud storage cat "${BUCKET}/test-file.txt"
 ```
 
-![Unbound pod: placeholder identity, 403 denied](screenshots/lab07/03-wi-unbound-denied.png)
+![Unbound pod: placeholder identity, 403 denied](screenshots/lab08/03-wi-unbound-denied.png)
 
 **Verified result:**
 
@@ -160,7 +176,7 @@ ERROR: (gcloud.storage.cat) HTTPError 403: Caller does not have storage.objects.
 This command is authenticated as YOUR_PROJECT_ID.svc.id.goog
 ```
 
-The unbound Pod doesn't fall back to the node's identity, and it doesn't get *some* identity that happens to lack permission — it resolves to `PROJECT_ID.svc.id.goog`, a placeholder that isn't a usable identity for anything. This is the actual security property Workload Identity buys you: the blast radius of "a Pod gets compromised" shrinks from "the whole node's identity" to "nothing, unless that specific Pod was explicitly bound to something." Full evidence: [`evidence/lab07-workload-identity-federation.txt`](evidence/lab07-workload-identity-federation.txt).
+The unbound Pod doesn't fall back to the node's identity, and it doesn't get *some* identity that happens to lack permission — it resolves to `PROJECT_ID.svc.id.goog`, a placeholder that isn't a usable identity for anything. This is the actual security property Workload Identity buys you: the blast radius of "a Pod gets compromised" shrinks from "the whole node's identity" to "nothing, unless that specific Pod was explicitly bound to something." Full evidence: [`evidence/lab08-workload-identity-federation.txt`](evidence/lab08-workload-identity-federation.txt).
 
 Clean up before moving on:
 
@@ -175,6 +191,23 @@ kubectl delete pod wi-test wi-test-unbound
 ### B.1 Concepts, briefly
 
 Binary Authorization enforces that only images meeting a policy — typically "signed by a specific trusted party" — can be deployed to a cluster. The unit of trust is an **attestor**: a Container Analysis note plus a public key. Something (a CI pipeline, a human, a scanner that only signs off on clean images) signs an image's digest with the corresponding private key; Binary Authorization checks for a valid signature from a trusted attestor before allowing the Pod to be admitted.
+
+```mermaid
+flowchart TB
+    KMS["Cloud KMS key<br/>advk8s-attestor-key"] -->|"public key attached to"| ATT["Attestor: advk8s-attestor<br/>(Container Analysis note)"]
+
+    IMG["nginx@sha256:...<br/>pushed to Artifact Registry"] -->|"1. by tag"| A1["kubectl run --image=nginx:1.27-alpine"]
+    A1 -- "denied: Expected digest<br/>with sha256 scheme" --> DENY1["VIOLATES_POLICY"]
+
+    IMG -->|"2. by digest, unsigned"| A2["kubectl run --image=nginx@sha256:..."]
+    A2 -- "denied: No attestations found" --> DENY2["VIOLATES_POLICY"]
+
+    KMS -->|"sign-and-create"| SIGNED["Attestation for this exact digest"]
+    IMG -->|"3. by digest, signed"| A3["kubectl run --image=nginx@sha256:..."]
+    SIGNED -.->|"attestor checks signature"| ATT
+    ATT -->|"valid, trusted"| A3
+    A3 --> ADMIT["Pod created, Running"]
+```
 
 ### B.2 Enable enforcement on the cluster
 
@@ -291,7 +324,7 @@ IMAGE_BY_DIGEST="us-central1-docker.pkg.dev/${PROJECT_ID}/advk8s-images/nginx@${
 kubectl run unattested-test --image="$IMAGE" --restart=Never
 ```
 
-![Denied: Expected digest with sha256 scheme, but got tag or malformed digest](screenshots/lab07/04-binauthz-attempt1-tag.png)
+![Denied: Expected digest with sha256 scheme, but got tag or malformed digest](screenshots/lab08/04-binauthz-attempt1-tag.png)
 
 ```
 Error from server (VIOLATES_POLICY): ... denied by attestor ...:
@@ -306,7 +339,7 @@ Binary Authorization refuses tag references outright — an attestation binds to
 kubectl run binauthz-test --image="$IMAGE_BY_DIGEST" --restart=Never
 ```
 
-![Denied: No attestations found that were valid and signed by a key trusted by the attestor](screenshots/lab07/05-binauthz-attempt2-unattested.png)
+![Denied: No attestations found that were valid and signed by a key trusted by the attestor](screenshots/lab08/05-binauthz-attempt2-unattested.png)
 
 ```
 Error from server (VIOLATES_POLICY): ... denied by attestor projects/.../attestors/advk8s-attestor:
@@ -335,7 +368,7 @@ kubectl run binauthz-test --image="$IMAGE_BY_DIGEST" --restart=Never
 kubectl get pod binauthz-test
 ```
 
-![Signed image: admitted, Running](screenshots/lab07/06-binauthz-attempt3-signed-running.png)
+![Signed image: admitted, Running](screenshots/lab08/06-binauthz-attempt3-signed-running.png)
 
 **Verified result:**
 
@@ -345,7 +378,7 @@ NAME            READY   STATUS    RESTARTS   AGE
 binauthz-test   1/1     Running   0          9s
 ```
 
-Full evidence, including all three attempts verbatim: [`evidence/lab07-binary-authorization.txt`](evidence/lab07-binary-authorization.txt).
+Full evidence, including all three attempts verbatim: [`evidence/lab08-binary-authorization.txt`](evidence/lab08-binary-authorization.txt).
 
 ---
 
@@ -375,7 +408,7 @@ KMS key *versions* can be scheduled for destruction (a 24-hour minimum pending-d
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab07/`](screenshots/lab07/) (6 images)
-- Logs: [`evidence/lab07-workload-identity-federation.txt`](evidence/lab07-workload-identity-federation.txt), [`evidence/lab07-binary-authorization.txt`](evidence/lab07-binary-authorization.txt)
+- Screenshots: [`screenshots/lab08/`](screenshots/lab08/) (6 images)
+- Logs: [`evidence/lab08-workload-identity-federation.txt`](evidence/lab08-workload-identity-federation.txt), [`evidence/lab08-binary-authorization.txt`](evidence/lab08-binary-authorization.txt)
 
-**Next:** [Lab 8 — Implementing supply chain and runtime security controls (Falco)](lab-08-falco-runtime-security.md), or continue to [Lab 10](lab-10-cluster-autoscaler-gpu-nodepools.md) if you're doing the cloud-dependent labs back to back.
+**Next:** [Lab 9 — Implementing supply chain and runtime security controls (Falco)](lab-09-falco-runtime-security.md), or continue to [Lab 11](lab-11-cluster-autoscaler-gpu-nodepools.md) if you're doing the cloud-dependent labs back to back.

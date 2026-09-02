@@ -1,4 +1,4 @@
-# Lab 1 — Provisioning Clusters with Cluster API / KubeFed Federation
+# Lab 2 — Provisioning Clusters with Cluster API / KubeFed Federation
 
 **Day 1 · Multi-Cluster & Service Mesh**
 
@@ -36,6 +36,31 @@ Cluster API separates *who manages the cluster's lifecycle* from *where the clus
 
 For this lab we use the **Docker infrastructure provider (CAPD)**, which is Cluster API's own project for creating "clusters" out of Docker containers acting as nodes. It's meant for CI and learning CAPI's mechanics — the same `Cluster`/`Machine` YAML you write here works unchanged against AWS, Azure, GCP, vSphere, and others by swapping the infrastructure provider.
 
+```mermaid
+flowchart LR
+    subgraph MGMT["Management cluster (capi-mgmt, kind)"]
+        direction TB
+        CAPI["capi-controller-manager<br/>(core)"]
+        BOOT["capi-kubeadm-bootstrap<br/>controller-manager"]
+        CTRL["capi-kubeadm-control-plane<br/>controller-manager"]
+        CAPD["capd-controller-manager<br/>(Docker infra provider)"]
+        CM["cert-manager + cainjector + webhook"]
+        CLUSTER_OBJ["Cluster / MachineDeployment /<br/>KubeadmControlPlane objects you apply"]
+        CAPI --> CLUSTER_OBJ
+        CTRL --> CLUSTER_OBJ
+        BOOT --> CLUSTER_OBJ
+        CAPD -- "docker run" --> NODES
+    end
+
+    subgraph WORKLOAD["Workload cluster (capi-workload)"]
+        direction TB
+        NODES["3 Docker containers acting as nodes:<br/>1 control-plane + 2 workers"]
+    end
+
+    CLUSTER_OBJ -.->|"CAPD watches &amp; reconciles"| CAPD
+    DOCKER["Host Docker daemon<br/>(socket mounted from host)"] -.-> CAPD
+```
+
 ### A.2 Create the management cluster
 
 CAPD's controller needs to talk to the **host's** Docker daemon (not the daemon-in-a-container that `kind` gives you access to by default) so it can create the sibling containers that become your workload cluster's nodes. This means the management cluster must be created with the host's Docker socket explicitly mounted in:
@@ -54,7 +79,7 @@ EOF
 kind create cluster --name capi-mgmt --config kind-capi-mgmt.yaml
 ```
 
-![Management cluster created with the Docker socket mounted](screenshots/lab01/01-mgmt-cluster.png)
+![Management cluster created with the Docker socket mounted](screenshots/lab02/01-mgmt-cluster.png)
 
 > **Tested gotcha:** if you skip `extraMounts` and just run `kind create cluster --name capi-mgmt`, cluster provisioning will fail later with `Cannot connect to the Docker daemon at unix:///var/run/docker.sock` — the CAPD controller pod simply has no socket to talk to. We hit exactly this on the first attempt; the fix above is required, not optional.
 
@@ -65,7 +90,7 @@ export CLUSTER_TOPOLOGY=true
 clusterctl init --infrastructure docker
 ```
 
-![clusterctl init installs cert-manager and the CAPI providers](screenshots/lab01/02-clusterctl-init.png)
+![clusterctl init installs cert-manager and the CAPI providers](screenshots/lab02/02-clusterctl-init.png)
 
 This installs cert-manager, the core CAPI controller, the kubeadm bootstrap and control-plane providers, and the Docker infrastructure provider (CAPD) — **seven deployments total**: four CAPI-related (`capi-controller-manager`, `capi-kubeadm-bootstrap-controller-manager`, `capi-kubeadm-control-plane-controller-manager`, `capd-controller-manager`) plus cert-manager's own three (`cert-manager`, `cert-manager-cainjector`, `cert-manager-webhook`). Wait for them, then count them:
 
@@ -79,7 +104,7 @@ kubectl wait --for=condition=Available --timeout=120s \
 kubectl get pods -A | grep -E 'capi|capd|cert-manager'
 ```
 
-![All CAPI controllers Available: 7 pods total](screenshots/lab01/03-providers-available.png)
+![All CAPI controllers Available: 7 pods total](screenshots/lab02/03-providers-available.png)
 
 ### A.4 Generate and apply a workload cluster
 
@@ -89,7 +114,7 @@ The first, easy-to-hit mistake — omitting `--flavor development`:
 clusterctl generate cluster capi-workload --infrastructure docker --kubernetes-version v1.33.1 --control-plane-machine-count=1 --worker-machine-count=2
 ```
 
-![clusterctl fails without --flavor development](screenshots/lab01/04-gotcha-no-flavor.png)
+![clusterctl fails without --flavor development](screenshots/lab02/04-gotcha-no-flavor.png)
 
 > **Tested gotcha:** `clusterctl generate cluster ... --infrastructure docker` **without** `--flavor development` fails with `failed to read "cluster-template.yaml" from provider's repository`. The Docker provider doesn't publish a default template — CAPI's own quick-start release only ships `cluster-template-development.yaml` for it. Always pass `--flavor development` with the Docker provider.
 
@@ -105,7 +130,7 @@ clusterctl generate cluster capi-workload \
   | kubectl apply -f -
 ```
 
-![Objects created, including the ClusterClass](screenshots/lab01/05-generate-apply.png)
+![Objects created, including the ClusterClass](screenshots/lab02/05-generate-apply.png)
 
 Watch it come up:
 
@@ -113,7 +138,7 @@ Watch it come up:
 watch clusterctl describe cluster capi-workload
 ```
 
-![Provisioning in progress](screenshots/lab01/06-provisioning.png)
+![Provisioning in progress](screenshots/lab02/06-provisioning.png)
 
 You'll see a `Cluster`, a `DevCluster`, a `KubeadmControlPlane` with one `Machine`, and a `MachineDeployment` with two `Machine`s, each transitioning through provisioning states. Wait for the control plane specifically before moving on:
 
@@ -122,7 +147,7 @@ kubectl wait --for=condition=ControlPlaneInitialized cluster/capi-workload --tim
 clusterctl describe cluster capi-workload
 ```
 
-![ControlPlaneInitialized reached](screenshots/lab01/07-control-plane-init.png)
+![ControlPlaneInitialized reached](screenshots/lab02/07-control-plane-init.png)
 
 ### A.5 Get the workload cluster's kubeconfig
 
@@ -131,7 +156,7 @@ clusterctl get kubeconfig capi-workload > capi-workload.kubeconfig
 KUBECONFIG=capi-workload.kubeconfig kubectl get nodes
 ```
 
-![kubectl times out against the internal Docker IP](screenshots/lab01/08-gotcha-kubeconfig.png)
+![kubectl times out against the internal Docker IP](screenshots/lab02/08-gotcha-kubeconfig.png)
 
 > **Tested gotcha (macOS / Windows Docker Desktop only):** the kubeconfig `clusterctl` generates points `server:` at an internal Docker network IP (e.g. `https://172.19.0.3:6443`). On Linux this is directly reachable from the host; **on Docker Desktop for Mac/Windows it is not**, because containers run inside a hidden VM. You'll see `kubectl get nodes` hang and time out with `dial tcp 172.19.0.3:6443: i/o timeout`.
 >
@@ -152,7 +177,7 @@ After the patch:
 KUBECONFIG=capi-workload.kubeconfig kubectl get nodes
 ```
 
-![Three nodes appear, NotReady -- no CNI yet](screenshots/lab01/09-kubeconfig-patched.png)
+![Three nodes appear, NotReady -- no CNI yet](screenshots/lab02/09-kubeconfig-patched.png)
 
 Nodes appear but are `NotReady`. This is expected and is not a bug — like any freshly-kubeadm'd cluster, there's no CNI yet.
 
@@ -165,22 +190,22 @@ KUBECONFIG=capi-workload.kubeconfig kubectl apply \
   -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.1/manifests/calico.yaml
 ```
 
-![Calico applied](screenshots/lab01/10-calico.png)
+![Calico applied](screenshots/lab02/10-calico.png)
 
 ```bash
 KUBECONFIG=capi-workload.kubeconfig kubectl wait --for=condition=Ready nodes --all --timeout=180s
 KUBECONFIG=capi-workload.kubeconfig kubectl get nodes -o wide
 ```
 
-![All three nodes Ready](screenshots/lab01/10b-nodes-ready.png)
+![All three nodes Ready](screenshots/lab02/10b-nodes-ready.png)
 
 ```bash
 clusterctl describe cluster capi-workload
 ```
 
-![Verified: 3-node cluster, Available](screenshots/lab01/11-verified.png)
+![Verified: 3-node cluster, Available](screenshots/lab02/11-verified.png)
 
-Full captured output: [`evidence/lab01-capi-workload-cluster.txt`](evidence/lab01-capi-workload-cluster.txt).
+Full captured output: [`evidence/lab02-capi-workload-cluster.txt`](evidence/lab02-capi-workload-cluster.txt).
 
 **This is the result the lab is aiming at: a real 3-node Kubernetes cluster, provisioned declaratively by applying YAML to another cluster** — exactly the workflow CAPI uses against AWS, Azure, and GCP in production. Only the infrastructure provider changes.
 
@@ -188,7 +213,7 @@ Full captured output: [`evidence/lab01-capi-workload-cluster.txt`](evidence/lab0
 KUBECONFIG=capi-workload.kubeconfig kubectl get pods -A
 ```
 
-![Workload cluster system pods](screenshots/lab01/12-workload-pods.png)
+![Workload cluster system pods](screenshots/lab02/12-workload-pods.png)
 
 ### A.7 Explore: scaling the workers
 
@@ -199,7 +224,7 @@ kubectl scale machinedeployment capi-workload-md-0-g5ntv --replicas=3
 kubectl get machinedeployment capi-workload-md-0-g5ntv -w
 ```
 
-![DESIRED goes to 3, then reverts to 2 within seconds](screenshots/lab01/13-scale-test.png)
+![DESIRED goes to 3, then reverts to 2 within seconds](screenshots/lab02/13-scale-test.png)
 
 **Tested gotcha: this doesn't work.** Watch the `DESIRED` column — it accepts `3`, then reverts to `2` within a few seconds, before a third machine is ever created. The `development` flavor produces a **ClusterClass-managed** cluster, and the `MachineDeployment` is *owned by the `Cluster`* through `spec.topology`:
 
@@ -208,7 +233,7 @@ kubectl get machinedeployment capi-workload-md-0-g5ntv -o jsonpath='{.metadata.o
 kubectl get cluster capi-workload -o jsonpath='{.spec.topology.workers.machineDeployments}'
 ```
 
-![The MachineDeployment is owned by the Cluster; topology still says replicas=2](screenshots/lab01/14-scale-why.png)
+![The MachineDeployment is owned by the Cluster; topology still says replicas=2](screenshots/lab02/14-scale-why.png)
 
 The `ownerReferences` show the `MachineDeployment` belongs to the `Cluster`, and `spec.topology.workers.machineDeployments[0].replicas` is still `2` — that field is the actual source of truth for a ClusterClass-managed cluster, so a direct scale gets reconciled away.
 
@@ -221,7 +246,7 @@ kubectl patch cluster capi-workload --type=merge \
 KUBECONFIG=capi-workload.kubeconfig kubectl get nodes -w
 ```
 
-![DESIRED/CURRENT/READY all settle at 3 and stay there](screenshots/lab01/15-scale-correct.png)
+![DESIRED/CURRENT/READY all settle at 3 and stay there](screenshots/lab02/15-scale-correct.png)
 
 That sticks — `DESIRED`/`CURRENT`/`READY` settle at 3 and a fourth node joins. This is the practical difference between a plain CAPI cluster and a ClusterClass-managed one, and it's the kind of thing that quietly costs an afternoon in production if you don't know to look for it.
 
@@ -239,8 +264,8 @@ Give this a minute — CAPI deletes `Machine`s, which triggers CAPD to remove th
 docker ps -a --filter "name=capi-workload"
 ```
 
-![Cluster deleted](screenshots/lab01/16-teardown.png)
-![Zero containers remain](screenshots/lab01/16b-containers-gone.png)
+![Cluster deleted](screenshots/lab02/16-teardown.png)
+![Zero containers remain](screenshots/lab02/16b-containers-gone.png)
 
 > **Tested gotcha:** deleting the **management** cluster (`kind delete cluster --name capi-mgmt`) does **not** clean up the workload cluster's containers — CAPD's controller, which is what actually calls `docker rm`, is gone the instant the management cluster is. We hit this directly: after `kind delete cluster --name capi-mgmt`, four `capi-workload-*` containers were still running and had to be removed by hand with `docker rm -f`. **Always delete the `Cluster` object first, confirm the containers are gone, and only then delete the management cluster.**
 
@@ -248,7 +273,7 @@ docker ps -a --filter "name=capi-workload"
 kind delete cluster --name capi-mgmt
 ```
 
-![Management cluster deleted](screenshots/lab01/17-mgmt-deleted.png)
+![Management cluster deleted](screenshots/lab02/17-mgmt-deleted.png)
 
 ---
 
@@ -265,17 +290,36 @@ KubeFed (Kubernetes Cluster Federation v2) proposed a different multi-cluster mo
 
 This is a genuinely useful idea — it's the direct ancestor of what tools like Karmada and Open Cluster Management (OCM) do today.
 
+```mermaid
+flowchart TB
+    subgraph HOST["Host cluster (kubefed-demo)"]
+        direction TB
+        KFCTRL["kubefed-controller-manager"]
+        WEBHOOK["kubefed-admission-webhook"]
+        FTC["FederatedTypeConfig"]
+        FED["FederatedDeployment<br/>placement + overrides"]
+        KFCTRL --> WEBHOOK
+        FED --> KFCTRL
+        FTC --> KFCTRL
+    end
+
+    FED -.->|"fan out, per placement"| M1["Member cluster: cluster-east<br/>Deployment replicas=2"]
+    FED -.->|"override: replicas=5"| M2["Member cluster: cluster-west<br/>Deployment replicas=5"]
+
+    WEBHOOK -- "x509: certificate signed<br/>by unknown authority" --> BROKEN["Reproducibly broken --<br/>archived project, see B.2"]
+```
+
 ### B.2 Why we walk you through this as a documented failure, not a live must-succeed exercise
 
 **KubeFed was archived by SIG Multicluster on 2023-04-25** (moved to `kubernetes-retired/kubefed` on GitHub) and has had no commits since. We ran a full live install against this lab's own clusters as part of testing this material — three separate clean-slate attempts, reproduced below step by step with real terminal captures — and it failed every time, with three different errors in sequence. To rule out "too new a Kubernetes version for old software," we also repeated the test against `kindest/node:v1.21.14` — the Kubernetes minor version KubeFed actually targeted when it was archived. **It failed identically**, with the same certificate error, which rules out a version-compatibility issue and points instead to a real defect in the last published chart's webhook-certificate bootstrapping (most likely: the cert-rotation hook doesn't force the webhook pod to restart, so the `ValidatingWebhookConfiguration`'s CA bundle and the cert the pod actually serves fall out of sync).
 
-Full failure logs and the isolation test: [`evidence/lab01-kubefed-compatibility-findings.txt`](evidence/lab01-kubefed-compatibility-findings.txt).
+Full failure logs and the isolation test: [`evidence/lab02-kubefed-compatibility-findings.txt`](evidence/lab02-kubefed-compatibility-findings.txt).
 
 **The takeaway we want you to leave with:** this is not a lab environment problem, and it's not something you did wrong if you hit it yourself — it's the actual current state of an archived, unmaintained project. Treat any advice (including AI-generated advice, and including this document if it ages past its testing date) to "just deploy KubeFed" for a new multi-cluster project with real skepticism, and prefer its actively-maintained successors:
 
 - **[Karmada](https://karmada.io/)** — CNCF project, closest conceptually to KubeFed, actively maintained.
 - **[Open Cluster Management (OCM)](https://open-cluster-management.io/)** — CNCF project, broader multi-cluster lifecycle + policy + workload placement.
-- Cluster API itself, paired with a GitOps tool (Argo CD `ApplicationSet`s, Flux) targeting multiple clusters — the pattern Lab 3 touches on.
+- Cluster API itself, paired with a GitOps tool (Argo CD `ApplicationSet`s, Flux) targeting multiple clusters — the pattern Lab 4 touches on.
 
 ### B.3 Reproducing it yourself, step by step
 
@@ -288,7 +332,7 @@ helm repo add kubefed-charts https://raw.githubusercontent.com/kubernetes-retire
 helm repo update
 ```
 
-![Chart 0.10.0 still resolves from the retired repo](screenshots/lab01/18-kubefed-chart.png)
+![Chart 0.10.0 still resolves from the retired repo](screenshots/lab02/18-kubefed-chart.png)
 
 **Attempt 1 — the admission webhook refuses connections:**
 
@@ -297,7 +341,7 @@ helm upgrade --install kubefed kubefed-charts/kubefed \
   --namespace kube-federation-system --create-namespace --version=0.10.0
 ```
 
-![Objects rejected: connection refused (webhook pod not ready yet)](screenshots/lab01/19-kubefed-fail-1.png)
+![Objects rejected: connection refused (webhook pod not ready yet)](screenshots/lab02/19-kubefed-fail-1.png)
 
 This part is a normal, if annoying, race — the webhook pod isn't ready yet when Helm applies the `FederatedTypeConfig` objects. Re-running the install is the documented workaround.
 
@@ -307,13 +351,13 @@ This part is a normal, if annoying, race — the webhook pod isn't ready yet whe
 kubectl get pods -n kube-federation-system -w
 ```
 
-![CrashLoopBackOff](screenshots/lab01/20-kubefed-fail-2.png)
+![CrashLoopBackOff](screenshots/lab02/20-kubefed-fail-2.png)
 
 ```bash
 kubectl logs -n kube-federation-system -l kubefed-control-plane=controller-manager --tail=200 | grep -B1 -A3 -i "fatal\|F09"
 ```
 
-![The fatal error: spec.scope: Required value](screenshots/lab01/22-kubefed-fatal.png)
+![The fatal error: spec.scope: Required value](screenshots/lab02/22-kubefed-fatal.png)
 
 ```
 F0901 17:52:57.361919 1 controller-manager.go:299] Error creating KubeFedConfig
@@ -331,7 +375,7 @@ kubectl delete namespace kube-federation-system
 kubectl get crd | grep kubefed.io | awk '{print $1}' | xargs kubectl delete crd
 ```
 
-![Complete purge to a clean slate](screenshots/lab01/23-kubefed-purge.png)
+![Complete purge to a clean slate](screenshots/lab02/23-kubefed-purge.png)
 
 First pass after the purge fails the same way as attempt 1 (webhook not ready yet):
 
@@ -340,7 +384,7 @@ helm upgrade --install kubefed kubefed-charts/kubefed \
   --namespace kube-federation-system --create-namespace --version=0.10.0
 ```
 
-![Connection refused again on the fresh attempt](screenshots/lab01/24-purge-retry-connection-refused.png)
+![Connection refused again on the fresh attempt](screenshots/lab02/24-purge-retry-connection-refused.png)
 
 Second pass, webhook confirmed `Ready` first:
 
@@ -349,7 +393,7 @@ helm upgrade --install kubefed kubefed-charts/kubefed \
   --namespace kube-federation-system --create-namespace --version=0.10.0
 ```
 
-![x509: certificate signed by unknown authority](screenshots/lab01/25-kubefed-fail-3-x509.png)
+![x509: certificate signed by unknown authority](screenshots/lab02/25-kubefed-fail-3-x509.png)
 
 ```
 tls: failed to verify certificate: x509: certificate signed by unknown authority
@@ -393,7 +437,7 @@ Clean up when done:
 kind delete cluster --name kubefed-demo
 ```
 
-![No clusters, no containers left behind](screenshots/lab01/26-cleanup.png)
+![No clusters, no containers left behind](screenshots/lab02/26-cleanup.png)
 
 ---
 
@@ -406,7 +450,7 @@ kind delete cluster --name kubefed-demo
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab01/`](screenshots/lab01/) (27 images, real `screencapture` output)
-- Logs: [`evidence/lab01-capi-workload-cluster.txt`](evidence/lab01-capi-workload-cluster.txt), [`evidence/lab01-kubefed-compatibility-findings.txt`](evidence/lab01-kubefed-compatibility-findings.txt)
+- Screenshots: [`screenshots/lab02/`](screenshots/lab02/) (27 images, real `screencapture` output)
+- Logs: [`evidence/lab02-capi-workload-cluster.txt`](evidence/lab02-capi-workload-cluster.txt), [`evidence/lab02-kubefed-compatibility-findings.txt`](evidence/lab02-kubefed-compatibility-findings.txt)
 
-**Next:** [Lab 2 — GKE fleet management with attached AWS and Azure clusters](lab-02-gke-fleet-attached-clusters.md)
+**Next:** [Lab 3 — GKE fleet management with attached AWS and Azure clusters](lab-03-gke-fleet-attached-clusters.md)

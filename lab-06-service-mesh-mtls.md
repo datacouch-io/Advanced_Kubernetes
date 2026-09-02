@@ -1,14 +1,27 @@
-# Lab 5 — Deploying a Service Mesh and Configuring Traffic Policies, Including mTLS
+# Lab 6 — Deploying a Service Mesh and Configuring Traffic Policies, Including mTLS
 
 **Day 1 · Multi-Cluster & Service Mesh**
 
-> Every command below was actually run end to end on the same cluster as Lab 4, and every screenshot is a real `screencapture` of that run — including a real Kiali security view, not a mockup.
+> Every command below was actually run end to end on the same cluster as Lab 5, and every screenshot is a real `screencapture` of that run — including a real Kiali security view, not a mockup.
 
 ## What you'll learn
 
 - The difference between Istio's two mTLS modes, PERMISSIVE and STRICT, and what each actually allows on the wire.
 - How to enforce STRICT mTLS for a namespace and verify — behaviorally, not just by reading YAML — that plaintext traffic is actually rejected.
 - How `AuthorizationPolicy` layers identity-based access control on top of mTLS: a valid mesh certificate proves *who* a caller is, not *what* they're allowed to do.
+
+```mermaid
+flowchart LR
+    PLAIN["plain-client/sleep-plain<br/>(no sidecar)"] -- "PERMISSIVE: 200<br/>STRICT: connection reset" --> HBP["httpbin sidecar<br/>PeerAuthentication: STRICT"]
+
+    FORTIO["demo/fortio<br/>(sidecar, sa=default)"] -- "mTLS handshake: OK<br/>AuthorizationPolicy: ALLOW --&gt; 200" --> HBP
+
+    OTHER["other-team/sleep-other<br/>(sidecar, different sa)"] -- "mTLS handshake: OK<br/>AuthorizationPolicy: DENY --&gt; 403" --> HBP
+
+    HBP -.->|"principals allow-list:<br/>cluster.local/ns/demo/sa/default"| POLICY["AuthorizationPolicy:<br/>httpbin-allow-fortio-only"]
+```
+
+mTLS (`PeerAuthentication`) answers *"is this connection encrypted and is the caller who they claim to be?"* — a network-layer/identity question. `AuthorizationPolicy` answers *"is that identity allowed to call this specific thing?"* — a completely separate decision layered on top. `other-team/sleep-other` passes the first check and still fails the second.
 
 ## Time & cost
 
@@ -17,23 +30,23 @@
 
 ## Prerequisites
 
-**This lab builds directly on [Lab 4](lab-04-istio-traffic-shaping.md).** You need the `istio-lab` kind cluster, Istio installed, and the `demo` namespace with `httpbin` and `fortio` running.
+**This lab builds directly on [Lab 5](lab-05-istio-traffic-shaping.md).** You need the `istio-lab` kind cluster, Istio installed, and the `demo` namespace with `httpbin` and `fortio` running.
 
-If you're jumping straight to this lab without having done Lab 4, the minimum setup is:
+If you're jumping straight to this lab without having done Lab 5, the minimum setup is:
 
 ```bash
 kind create cluster --name istio-lab
 istioctl install --set profile=demo -y
 kubectl create namespace demo
 kubectl label namespace demo istio-injection=enabled
-# then deploy httpbin + fortio — see Lab 4 §4.2 for the full manifest
+# then deploy httpbin + fortio — see Lab 5 §4.2 for the full manifest
 ```
 
-We strongly recommend actually doing Lab 4 first — this lab reuses its services and its findings build on each other.
+We strongly recommend actually doing Lab 5 first — this lab reuses its services and its findings build on each other.
 
 ---
 
-## 5.1 Baseline: PERMISSIVE mode accepts plaintext
+## 6.1 Baseline: PERMISSIVE mode accepts plaintext
 
 Istio's default `PeerAuthentication` mode is **PERMISSIVE** — sidecars accept both mTLS and plaintext traffic on the same port, which is what makes it safe to enable Istio incrementally on a live cluster without an outage. Let's prove that concretely by talking to a mesh service **from outside the mesh**.
 
@@ -78,11 +91,11 @@ kubectl exec -n plain-client "$SLEEP_POD" -- \
   curl -sS -o /dev/null -w "HTTP %{http_code}\n" http://httpbin.demo:8000/get --max-time 5
 ```
 
-![HTTP 200 -- a non-mesh pod with no sidecar reaches a meshed service under PERMISSIVE](screenshots/lab04-05/05-mtls-permissive.png)
+![HTTP 200 -- a non-mesh pod with no sidecar reaches a meshed service under PERMISSIVE](screenshots/lab05-06/05-mtls-permissive.png)
 
 **Verified result:** `HTTP 200`. A completely unauthenticated, plaintext client outside the mesh reaches a meshed service without friction. This is expected under PERMISSIVE — and it's exactly why you shouldn't assume "we installed Istio" means "our traffic is encrypted and authenticated." It means it *can* be, once you turn on enforcement.
 
-## 5.2 Enforce STRICT mTLS
+## 6.2 Enforce STRICT mTLS
 
 `PeerAuthentication` is namespace- (or mesh-) scoped. Enforce it for `demo`:
 
@@ -121,7 +134,7 @@ kubectl exec -n demo "$FORTIO_POD" -c fortio -- \
   fortio load -c 1 -qps 0 -n 5 -loglevel warning http://httpbin:8000/get
 ```
 
-![Plaintext caller gets Connection reset by peer; in-mesh call still 100% success](screenshots/lab04-05/06-mtls-strict.png)
+![Plaintext caller gets Connection reset by peer; in-mesh call still 100% success](screenshots/lab05-06/06-mtls-strict.png)
 
 **Verified result:** `Code 200 : 5 (100.0 %)` — unaffected. Every hop between sidecars was already being upgraded to mTLS automatically; STRICT mode just closes off the plaintext fallback that PERMISSIVE left open.
 
@@ -139,11 +152,11 @@ Applied PeerAuthentication:
    default.demo
 ```
 
-Full data: [`evidence/lab05-mtls-strict.txt`](evidence/lab05-mtls-strict.txt).
+Full data: [`evidence/lab06-mtls-strict.txt`](evidence/lab06-mtls-strict.txt).
 
 ---
 
-## 5.3 mTLS proves identity; `AuthorizationPolicy` decides access
+## 6.3 mTLS proves identity; `AuthorizationPolicy` decides access
 
 A common misunderstanding: "we turned on mTLS, so our services are locked down." mTLS proves **who is calling** (a cryptographic identity, derived from the caller's service account: `cluster.local/ns/<namespace>/sa/<service-account>`). It does **not**, by itself, decide **who's allowed to call what** — that's `AuthorizationPolicy`. Let's show both halves.
 
@@ -211,13 +224,13 @@ kubectl exec -n other-team "$SLEEP_OTHER" -- \
   curl -sS -o /dev/null -w "HTTP %{http_code}\n" http://httpbin.demo:8000/get --max-time 5
 ```
 
-![fortio: 100% success. sleep-other: HTTP 403 despite a valid mesh certificate](screenshots/lab04-05/07-authz-policy.png)
+![fortio: 100% success. sleep-other: HTTP 403 despite a valid mesh certificate](screenshots/lab05-06/07-authz-policy.png)
 
 **Verified result:** `HTTP 403`.
 
 **The same distinction, seen live in Kiali's security view**, with both `plain-client` and `other-team` generating traffic toward `httpbin` at once:
 
-![Kiali graph: green edge from fortio (allowed), red edge from sleep-other (denied, elevated error rate)](screenshots/lab04-05/08-kiali-security-view.png)
+![Kiali graph: green edge from fortio (allowed), red edge from sleep-other (denied, elevated error rate)](screenshots/lab05-06/08-kiali-security-view.png)
 
 The green edge (`fortio` → `httpbin`) and the red edge (`sleep-other` → `httpbin`, driven by the repeated 403s) sit side by side on the same graph — a valid mTLS identity got the connection established, and `AuthorizationPolicy` still said no.
 
@@ -229,7 +242,7 @@ Side by side:
 | `other-team/sleep-other` | Yes | Yes | No — wrong principal | `403` |
 | `demo/fortio` | Yes | Yes | Yes | `200` |
 
-Full data: [`evidence/lab05-authorization-policy.txt`](evidence/lab05-authorization-policy.txt). This is the layering to internalize: **mTLS is necessary but not sufficient.** A valid mesh identity gets you authenticated, not authorized.
+Full data: [`evidence/lab06-authorization-policy.txt`](evidence/lab06-authorization-policy.txt). This is the layering to internalize: **mTLS is necessary but not sufficient.** A valid mesh identity gets you authenticated, not authorized.
 
 ---
 
@@ -247,11 +260,11 @@ Full data: [`evidence/lab05-authorization-policy.txt`](evidence/lab05-authorizat
 kind delete cluster --name istio-lab
 ```
 
-![Cluster deleted, no kind clusters remain](screenshots/lab04-05/09-cleanup.png)
+![Cluster deleted, no kind clusters remain](screenshots/lab05-06/09-cleanup.png)
 
 ## Evidence
 
-- Screenshots: [`screenshots/lab04-05/`](screenshots/lab04-05/) (9 images, shared with Lab 4 — same cluster, one continuous run)
-- Logs: [`evidence/lab05-mtls-strict.txt`](evidence/lab05-mtls-strict.txt), [`evidence/lab05-authorization-policy.txt`](evidence/lab05-authorization-policy.txt)
+- Screenshots: [`screenshots/lab05-06/`](screenshots/lab05-06/) (9 images, shared with Lab 5 — same cluster, one continuous run)
+- Logs: [`evidence/lab06-mtls-strict.txt`](evidence/lab06-mtls-strict.txt), [`evidence/lab06-authorization-policy.txt`](evidence/lab06-authorization-policy.txt)
 
-**Next:** Day 1 continues with [Lab 2 — GKE fleet management with attached AWS and Azure clusters](lab-02-gke-fleet-attached-clusters.md), if you haven't done it yet.
+**Next:** Day 1 continues with [Lab 3 — GKE fleet management with attached AWS and Azure clusters](lab-03-gke-fleet-attached-clusters.md), if you haven't done it yet.
