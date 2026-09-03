@@ -6,7 +6,7 @@ This guide gets your laptop ready for all sixteen labs across all three days. Wo
 
 > **All sixteen labs, across all three days, are now fully live-tested** — every line in this guide has been run for real. The one thing that could not be completed for real anywhere in this course is [Lab 13](lab-13-gpu-tpu-inference-gke.md)'s GPU-attached hardware check specifically, which this training project's own GCP account is blocked from (a real, confirmed `GPUS_ALL_REGIONS: 0` quota) — see that lab's own status note, and [Lab 11](lab-11-cluster-autoscaler-gpu-nodepools.md) for the equivalent check completed for real on AWS.
 
-Every command in this guide, and in every lab document in this folder, was executed end-to-end on a real machine (macOS, Apple Silicon) against real clusters — local (kind/Docker) for the fully-local labs, and live GKE + EKS + AKS clusters for the cloud-dependent ones. Verified output is captured in [`evidence/`](evidence/) alongside each lab. If a command in a lab doesn't match what you see, check this guide first — version drift in fast-moving CLIs (`gcloud`, `eksctl`, `istioctl`, `kyverno`) is the most common cause.
+Every command in this guide, and in every lab document in this folder, was executed end-to-end on a real machine (macOS, Apple Silicon) against real clusters — local (kind/Docker) for the fully-local labs, and live GKE + EKS clusters for the cloud-dependent ones. Verified output is captured in [`evidence/`](evidence/) alongside each lab. If a command in a lab doesn't match what you see, check this guide first — version drift in fast-moving CLIs (`gcloud`, `eksctl`, `istioctl`, `kyverno`) is the most common cause.
 
 ---
 
@@ -19,7 +19,7 @@ Every command in this guide, and in every lab document in this folder, was execu
 | RAM | 8 GB free for Docker | 16 GB free for Docker |
 | Disk | 20 GB free | 40 GB free |
 
-Labs 2, 5, and 6 run multiple local Kubernetes clusters (via `kind`) on top of Docker simultaneously. Docker Desktop's default resource allocation is often too small — go to **Docker Desktop → Settings → Resources** and confirm at least 8 GB RAM / 4 CPUs is allocated before Day 1. This guide's tooling was validated with Docker Desktop given 12 CPUs / 8 GB RAM.
+Day 1's Labs 2-6 now run entirely on real GKE, not local `kind` — nothing in Day 1 stresses local Docker resources. Several Day 2 and Day 3 labs (7, 9, 10, 12, 14, 15, 16) do run local `kind` clusters, some of them multiple at once. Docker Desktop's default resource allocation is often too small for those — go to **Docker Desktop → Settings → Resources** and confirm at least 8 GB RAM / 4 CPUs is allocated before Day 2. This guide's tooling was validated with Docker Desktop given 12 CPUs / 8 GB RAM.
 
 > Windows users: run everything inside **WSL2** (Ubuntu). Native Windows shells are not covered by these labs.
 
@@ -27,15 +27,14 @@ Labs 2, 5, and 6 run multiple local Kubernetes clusters (via `kind`) on top of D
 
 ## 2. Cloud accounts you need
 
-Lab 1 and Labs 3 and 4 all use real GKE clusters; Labs 3 and 4 specifically attach real clusters from all three major clouds into one fleet. Before Day 1, make sure you (or your organization) have:
+Day 1 (Labs 1-6) runs entirely on real GKE — Lab 1 creates its own two clusters, and Labs 2-6 share a separate two-cluster platform. Day 2's Lab 11 additionally needs a real AWS account. Before Day 1, make sure you (or your organization) have:
 
 1. **A Google Cloud project** with billing enabled and permission to enable APIs and create GKE clusters (`roles/owner` or `roles/container.admin` + `roles/gkehub.admin` + `roles/serviceusage.serviceUsageAdmin`).
-2. **An AWS account** with permission to create VPCs, EKS clusters, and IAM roles (`AdministratorAccess`, or an equivalent scoped policy, is simplest for a training sandbox).
-3. **An Azure subscription** with permission to create resource groups and AKS clusters (`Contributor` role on the subscription).
+2. **An AWS account** (needed starting Day 2, for Lab 11) with permission to create VPCs, EKS clusters, and IAM roles (`AdministratorAccess`, or an equivalent scoped policy, is simplest for a training sandbox).
 
-Use a **disposable sandbox project/account/subscription** for these labs if at all possible — Labs 3 and 4 create real billed resources (GKE, EKS, AKS clusters), and Lab 1 creates two more real GKE clusters on its own. Each lab document ends with a teardown section; running it promptly keeps cost to a few dollars per person.
+Use a **disposable sandbox project/account** for these labs if at all possible — Labs 2-6 create four real GKE clusters in total across the day (two for Lab 1, two for Labs 2-6's shared platform), and Lab 11 creates a real EKS cluster. Each lab document ends with a teardown section; running it promptly keeps cost to a few dollars per person.
 
-Costs observed during testing (single small cluster per cloud, ~1–2 hours total lifetime, deleted immediately after): **under $5 total across all three clouds.** Your cost will scale with how long you leave clusters running, so don't skip the teardown steps.
+Costs observed during testing (small clusters, torn down promptly after each lab/exercise): **under $10 total across the whole course.** Your cost will scale with how long you leave clusters running, so don't skip the teardown steps.
 
 ---
 
@@ -52,17 +51,12 @@ brew install kubectl kind helm
 # Cloud provider CLIs
 brew install --cask google-cloud-sdk    # gcloud
 brew install awscli                     # aws
-brew install azure-cli                  # az
-
-# Multi-cluster provisioning
-brew install clusterctl
 
 # Service mesh
 brew install istioctl
 
-# AWS/Azure Kubernetes auth helpers
+# AWS Kubernetes auth helper (Lab 11 only)
 brew install eksctl
-brew install Azure/kubelogin/kubelogin
 
 # GKE kubectl auth plugin and beta commands (via gcloud, not brew)
 gcloud components install gke-gcloud-auth-plugin
@@ -114,13 +108,6 @@ sudo apt-get update && sudo apt-get install -y google-cloud-cli
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
 unzip awscliv2.zip && sudo ./aws/install && rm -rf awscliv2.zip aws/
 
-# az
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-# clusterctl
-curl -L https://github.com/kubernetes-sigs/cluster-api/releases/latest/download/clusterctl-linux-amd64 -o clusterctl
-sudo install -o root -g root -m 0755 clusterctl /usr/local/bin/clusterctl && rm clusterctl
-
 # istioctl
 curl -L https://istio.io/downloadIstio | sh -
 sudo mv istio-*/bin/istioctl /usr/local/bin/ && rm -rf istio-*/
@@ -129,11 +116,6 @@ sudo mv istio-*/bin/istioctl /usr/local/bin/ && rm -rf istio-*/
 curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz"
 tar -xzf eksctl_Linux_amd64.tar.gz -C /tmp && rm eksctl_Linux_amd64.tar.gz
 sudo mv /tmp/eksctl /usr/local/bin
-
-# kubelogin
-curl -LO https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-amd64.zip
-unzip kubelogin-linux-amd64.zip
-sudo mv bin/linux_amd64/kubelogin /usr/local/bin/ && rm -rf kubelogin-linux-amd64.zip bin/
 
 # GKE kubectl auth plugin and beta commands (via gcloud, identical to macOS)
 gcloud components install gke-gcloud-auth-plugin
@@ -157,9 +139,9 @@ curl -sS https://webinstall.dev/k9s | bash
 
 > **Docker on Linux:** these labs just need a working Docker daemon reachable via the normal `docker` CLI and socket — Docker Desktop for Linux exists, but the far more common setup is [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) directly (`sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`, then add your user to the `docker` group: `sudo usermod -aG docker $USER` and re-log-in). Either way, the `docker info` check in §3's Docker section and the smoke test in §5 are what actually matter — if those pass, it doesn't matter which Docker distribution you used to get there.
 
-### KubeFed CLI (Lab 2, legacy/reference only)
+### KubeFed CLI (referenced in Lab 3, legacy/reference only)
 
-`kubefedctl` is **not** in Homebrew — the project was archived by Kubernetes SIG Multicluster in April 2023 and no longer ships current builds. Lab 2 explains why this matters and treats KubeFed as a read-along exercise rather than a live one, but if you want the CLI on your machine anyway:
+`kubefedctl` is **not** in Homebrew — the project was archived by Kubernetes SIG Multicluster in April 2023 and no longer ships current builds. Lab 3 explains why this matters and treats KubeFed as a boxed aside rather than the mechanism it actually uses, but if you want the CLI on your machine anyway:
 
 **macOS:**
 
@@ -207,10 +189,6 @@ gcloud auth application-default login    # needed by some Terraform/SDK-based to
 aws configure
 #   -> enter your Access Key ID, Secret Access Key, default region (e.g. us-west-2), output format (json)
 # Prefer an IAM user with programmatic access over root account keys, even in a sandbox account.
-
-# Azure
-az login
-az account set --subscription "YOUR_SUBSCRIPTION_NAME_OR_ID"
 ```
 
 ---
@@ -224,7 +202,6 @@ echo "--- local tooling ---"
 kubectl version --client
 kind version
 helm version
-clusterctl version
 istioctl version --remote=false
 docker info >/dev/null 2>&1 && echo "docker daemon: OK"
 
@@ -232,12 +209,10 @@ echo "--- cloud CLIs, authenticated ---"
 gcloud config list
 gcloud auth list
 aws sts get-caller-identity
-az account show
 
 echo "--- cloud-specific k8s tooling ---"
 which gke-gcloud-auth-plugin
 eksctl version
-kubelogin --version
 ```
 
 Reference output (captured during testing of this guide — your versions may be newer, that's fine):
@@ -246,13 +221,10 @@ Reference output (captured during testing of this guide — your versions may be
 kubectl:    v1.36.1
 kind:       v0.33.0
 helm:       v4.2.4
-clusterctl: v1.14.0
 istioctl:   1.31.0
 eksctl:     0.230.0
-kubelogin:  v0.2.19
 gcloud:     Google Cloud SDK 574.0.0
 aws-cli:    2.35.11
-az-cli:     2.88.0
 docker:     29.7.2
 ```
 
@@ -276,11 +248,11 @@ You should see one `Ready` node, then a clean deletion. If this fails, fix it be
 |---|---|---|---|
 | **Day 1** | | | |
 | 1 — GKE cluster architecture (Autopilot vs Standard) | Real GKE | Yes — see lab doc | Minimal (CLI only) |
-| 2 — Cluster API / KubeFed | Local (`kind` + Docker) | $0 | ~2 GB RAM, 3 containers |
-| 3 — GKE fleet + attached AWS/Azure clusters | Real GKE + EKS + AKS | Yes — see lab doc | Minimal (CLI only) |
-| 4 — Connecting/managing multi-cloud clusters | Real GKE + EKS + AKS (reuses Lab 3's clusters) | Included in Lab 3 | Minimal (CLI only) |
-| 5 — Istio traffic shaping | Local (`kind` + Docker) | $0 | ~2 GB RAM, 6-8 containers |
-| 6 — Service mesh mTLS | Local (`kind` + Docker), builds on Lab 5 | $0 | Same cluster as Lab 5 |
+| 2 — Standing up the fleet | Real GKE (two clusters) | Yes — see lab doc | Minimal (CLI only) |
+| 3 — Federating a real workload | Same two clusters as Lab 2 | Included in Lab 2 | Minimal (CLI only) |
+| 4 — Installing the mesh | Same two clusters | Included in Lab 2 | Minimal (CLI + `istioctl`) |
+| 5 — Securing and shaping traffic | Same two clusters | Included in Lab 2 | Minimal (CLI only) |
+| 6 — Validating the platform | Same two clusters, torn down here | Included in Lab 2 | Minimal (`fortio` for load testing) |
 | **Day 2** | | | |
 | 7 — Image scanning + admission control | Local (`kind` + Docker) | $0 | ~2 GB RAM |
 | 8 — Workload Identity Federation + Binary Authorization | Real GKE | Yes — see lab doc | Minimal (CLI + Docker for one image push) |
@@ -294,7 +266,7 @@ You should see one `Ready` node, then a clean deletion. If this fails, fix it be
 | 15 — OpenTelemetry observability | Local (`kind` + Docker) | $0 | ~2 GB RAM (cert-manager + OTel Operator + Jaeger) |
 | 16 — Chaos engineering with Chaos Mesh | Local (`kind` + Docker) | $0 | ~2 GB RAM |
 
-Lab 1 stands alone (its own two clusters, created and torn down within the lab). Labs 3 and 4 are designed to be done back-to-back in one sitting, since Lab 4 reuses the three clusters Lab 3 creates. Read both lab documents before starting Lab 3 so you don't tear anything down early. Labs 5 and 6 likewise share one Istio installation. Day 3's labs are each independent (no shared clusters), and only Lab 13 needs a cloud account.
+Lab 1 stands alone (its own two clusters, created and torn down within the lab). Labs 2 through 6 are one continuous platform build — the same two clusters, provisioned in Lab 2, are used and built on through Lab 6, torn down only at the end. Read all five lab documents before starting Lab 2 so you don't tear anything down early. Day 3's labs are each independent (no shared clusters), and only Lab 13 needs a cloud account.
 
 ---
 
@@ -306,13 +278,14 @@ These aren't hypothetical — each one was hit while validating these labs and i
 
 - **`gcloud container clusters create/update --master-authorized-networks` fails outright unless you also pass `--enable-master-authorized-networks`** — several older docs and blog posts show only the CIDR-list flag on its own, which current `gcloud` rejects with `Cannot use --master-authorized-networks if --enable-master-authorized-networks is not specified`. Lab 1 hits this on both `create` and `update`.
 - **A plain `curl ifconfig.me` can silently hand back an IPv6 address on a dual-stack network**, which then silently breaks `--master-authorized-networks` (it expects an IPv4 CIDR). Use `curl -4 -s ifconfig.me` explicitly. Lab 1 has the fix.
-- **CAPD (Cluster API's Docker provider) needs the host Docker socket mounted into the `kind` management cluster.** If you create the management cluster with plain `kind create cluster`, cluster provisioning fails with `Cannot connect to the Docker daemon`. Lab 2 has the correct `kind` config.
-- **On Docker Desktop for Mac/Windows, a CAPI workload cluster's kubeconfig points at an internal container IP that your host can't reach.** You have to patch the kubeconfig's `server:` field to `127.0.0.1:<mapped-port>`. Lab 2 shows exactly how.
-- **KubeFed does not currently install successfully** on any Kubernetes version we tested (both current-generation and the older version it originally targeted). Lab 2 documents the exact failure and why, and uses Cluster API for the hands-on "provision a real cluster" exercise instead.
+- **A GKE internal load balancer is regional by default — clients in a different region than the load balancer are silently blocked (connection timeout, not a clear error) unless you enable Global Access** (`networking.gke.io/internal-load-balancer-allow-global-access: "true"` on the Service). A genuinely cross-region multi-cluster platform hits this immediately. Lab 3 has the full detail.
+- **GKE's auto-generated per-cluster firewall rules only permit traffic sourced from that same cluster's own Pod/Service CIDR** — cross-cluster Pod-to-Pod traffic (e.g. one cluster's Pod calling another cluster's internal load balancer) has no matching rule by default and needs an explicit firewall rule allowing both clusters' Pod ranges. Lab 3 has the exact commands.
+- **`python:3.11-slim` (and most `-slim` base images) don't include `curl`.** Use `python3 -c "import urllib.request; ..."` for a quick in-container HTTP check instead of assuming `curl` is there.
+- **`gcloud container fleet memberships register --enable-workload-identity` doesn't itself enable Workload Identity on the cluster** — that flag only tells registration to require and check for it; registering before enabling it fails with `FAILED_PRECONDITION: Workload Identity is not enabled`. Enable it directly first (`gcloud container clusters update ... --workload-pool=PROJECT_ID.svc.id.goog`), and budget real time for it — reconciling this change on an already-running cluster took 10-20+ minutes per cluster during testing, slower than creating the clusters themselves. Lab 2 has the full detail.
+- **KubeFed does not currently install successfully** on any Kubernetes version we tested (both current-generation and the older version it originally targeted). Lab 3 documents the exact failure and why, and uses plain Kubernetes/GCP mechanisms plus Istio's own multi-cluster service discovery for the hands-on cross-cluster workload instead.
 - **Istio fault-injection aborts are not retried**, even with a `retries` policy on the same route. If you want to demo retries working, do it against a real upstream failure (Lab 5 uses a pod deletion mid-traffic), not `fault.abort`.
 - **`gke-gcloud-auth-plugin` can report "installed" via `gcloud components list` and still fail with `executable ... not found`.** On a Homebrew-cask install of `gcloud` on macOS, the plugin binary lands in `google-cloud-sdk/bin/`, which isn't itself on `PATH` — only the SDK root is. Symlink it: `ln -sf "$(gcloud info --format='value(installation.sdk_root)')/bin/gke-gcloud-auth-plugin" /opt/homebrew/bin/`.
-- **GKE fleet "attached clusters" only supports EKS/AKS Kubernetes versions within roughly the last 3 minors** — check `gcloud container attached get-server-config --location=<region>` and pick a compatible version *before* you create the EKS/AKS cluster, not after. We initially created EKS at a version that had already aged out and had to delete and recreate. Lab 3 has the full detail.
-- **Fleet attachment and Kubernetes RBAC are separate.** Attaching a cluster (or being able to `list` it in the fleet) does not grant your identity permission to run `kubectl` commands against it via Connect Gateway — you'll hit a `Forbidden` error until you explicitly grant RBAC with `gcloud container fleet memberships generate-gateway-rbac ... --apply`. Lab 4 walks through this exact failure and fix.
+- **Don't assume Connect Gateway access is scoped by per-user Kubernetes RBAC the way `generate-gateway-rbac`'s existence implies.** Tested directly with a real, narrowly-scoped service account (only `roles/gkehub.gatewayReader`, no Kubernetes RoleBinding anywhere): it got full cluster-admin-equivalent read **and write** access anyway. Verify this on your own cluster and account before relying on it as a security boundary — don't take the documented model on faith. Lab 2 has the full investigation.
 
 **Day 2**
 
@@ -330,7 +303,7 @@ These aren't hypothetical — each one was hit while validating these labs and i
 - **`kfp==2.7.0` requires Python `<3.13`** — on a machine whose default `python3` is newer, `pip install kfp==2.7.0` fails outright rather than silently installing an incompatible version. Use an older interpreter in a dedicated virtualenv (macOS's bundled `/usr/bin/python3` works). Lab 12 has the detail.
 - **The canonical `kubeflow/pytorch-dist-mnist-test:latest` example image referenced in most Kubeflow tutorials doesn't exist**, and its corrected replacement (`kubeflow/pytorch-dist-mnist:latest`) is a 30GB multi-platform image that can fail to load into a local `kind` cluster on Apple Silicon (`ctr: content digest ... not found`) even after a successful `docker pull`. Lab 12 uses a lightweight custom script instead and shows why.
 - **A Helm release's Deployment isn't always named after the release alone** — `helm install otel-operator ...` creates a Deployment named `otel-operator-opentelemetry-operator` (`<release>-<chart>`), not `otel-operator`. The Operator's own generated Collector resources follow the same `<name>-collector` pattern. Always check `kubectl get deployment` rather than assuming. Lab 15 hits this exact naming gotcha twice.
-- **The official Kubeflow Pipelines standalone backend (the full multi-component KFP UI/API/MySQL/MinIO install) currently fails to install cleanly**, independent of this project: two of its own pinned container images (`gcr.io/ml-pipeline/minio:...`, `gcr.io/ml-pipeline/frontend:2.2.0`) no longer resolve on `gcr.io` — a known, already-filed upstream bug (kubeflow/pipelines#12638, #10994) — and a third component crashes under Apple Silicon/arm64 emulation. Lab 12 documents this as an honest dead end with full evidence, the same way Lab 2 treats KubeFed.
+- **The official Kubeflow Pipelines standalone backend (the full multi-component KFP UI/API/MySQL/MinIO install) currently fails to install cleanly**, independent of this project: two of its own pinned container images (`gcr.io/ml-pipeline/minio:...`, `gcr.io/ml-pipeline/frontend:2.2.0`) no longer resolve on `gcr.io` — a known, already-filed upstream bug (kubeflow/pipelines#12638, #10994) — and a third component crashes under Apple Silicon/arm64 emulation. Lab 12 documents this as an honest dead end with full evidence, the same way Lab 3 treats KubeFed.
 - **A `NetworkChaos` (or any) injected delay can silently take a Service to zero healthy endpoints, not just "slow it down"** — if a `readinessProbe`'s `timeoutSeconds` (default `1`) is shorter than the injected delay and `mode: all` affects every replica at once, every Pod fails readiness simultaneously and any client gets `connection refused`. Lab 16 has the full real event trail and the fix (`timeoutSeconds: 5`).
 - **`GCE_STOCKOUT` can mean more than "your quota is 0."** This project's GPU node pool creation (Lab 11/13) failed with a 35-minute `GCE_STOCKOUT`-shaped timeout that traced back to a real `GPUS_ALL_REGIONS: 0` quota — but retrying with an entirely GPU-free cluster in a different zone hit the identical failure signature despite plentiful regional CPU quota (confirmed: `CPUS` limit 200, usage 0). Don't assume checking your own quota is sufficient diagnosis for this error class — sometimes it really is provider-side capacity, unrelated to anything in your account. Lab 13 has the full comparison.
 - **NVIDIA Triton's default `model-control-mode` only loads models present at startup** — adding files to `/models` afterward via `kubectl exec` does nothing until you enable `--model-control-mode=explicit`, which adds a runtime `/v2/repository/models/<name>/load` endpoint. Lab 13 hits this.

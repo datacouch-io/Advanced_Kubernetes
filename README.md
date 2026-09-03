@@ -1,6 +1,8 @@
 # Advanced Kubernetes — Day 1, Day 2 & Day 3
 
-Sixteen hands-on labs across three days: multi-cluster provisioning and service mesh (Day 1), security and scaling/optimization (Day 2), then AI/ML workloads and observability (Day 3). Every command in every lab was executed end-to-end against real infrastructure — local `kind` clusters for the fully-local labs, live GKE, EKS, and AKS clusters for the cloud-dependent ones — with real screenshots embedded directly in each lab at the step they belong to (not a separate document), plus raw captured output in [`evidence/`](evidence/). The one exception, reported honestly rather than glossed over: [Lab 13](lab-13-gpu-tpu-inference-gke.md)'s GPU-attached hardware check couldn't be completed on this training project's own GCP account (a confirmed `GPUS_ALL_REGIONS: 0` quota) — see that lab's status note for the full, real evidence.
+Sixteen hands-on labs across three days: multi-cluster provisioning and service mesh (Day 1), security and scaling/optimization (Day 2), then AI/ML workloads and observability (Day 3). Every command in every lab was executed end-to-end against real infrastructure — local `kind` clusters for the fully-local labs, live GKE and EKS clusters for the cloud-dependent ones — with real screenshots embedded directly in each lab at the step they belong to (not a separate document), plus raw captured output in [`evidence/`](evidence/). The one exception, reported honestly rather than glossed over: [Lab 13](lab-13-gpu-tpu-inference-gke.md)'s GPU-attached hardware check couldn't be completed on this training project's own GCP account (a confirmed `GPUS_ALL_REGIONS: 0` quota) — see that lab's status note for the full, real evidence.
+
+> **Day 1's Labs 2-6 were redesigned into one continuous multi-cluster platform build** (two real GKE clusters, one fleet, one Istio mesh, a real cross-cluster app, load-tested and failed-over for real) — see [LAB-CREATION-METHODOLOGY.md](LAB-CREATION-METHODOLOGY.md) for the design process, and each lab for its own real findings.
 
 ## Start here
 
@@ -11,13 +13,13 @@ Sixteen hands-on labs across three days: multi-cluster provisioning and service 
 | # | Lab | Runs against | Cost |
 |---|---|---|---|
 | 1 | [GKE cluster architecture: Autopilot vs Standard, private clusters, release channels](lab-01-gke-cluster-architecture.md) | Real GKE | ~a few $ |
-| 2 | [Provisioning clusters with Cluster API / KubeFed federation](lab-02-cluster-api-kubefed-federation.md) | Local (`kind` + Docker) | $0 |
-| 3 | [GKE fleet management with attached AWS and Azure clusters](lab-03-gke-fleet-attached-clusters.md) | Real GKE + EKS + AKS | ~a few $ |
-| 4 | [Connecting and managing multiple clusters across cloud providers](lab-04-multi-cluster-management.md) | Same clusters as Lab 3 | included above |
-| 5 | [Deploying Istio and configuring traffic shaping, retries, and circuit breaking](lab-05-istio-traffic-shaping.md) | Local (`kind` + Docker) | $0 |
-| 6 | [Deploying a service mesh and configuring traffic policies, including mTLS](lab-06-service-mesh-mtls.md) | Local, builds on Lab 5 | $0 |
+| 2 | [Standing up the fleet](lab-02-stand-up-the-fleet.md) | Real GKE (two clusters) | ~a few $ |
+| 3 | [Federating a real workload across the fleet](lab-03-federate-a-real-workload.md) | Same two clusters as Lab 2 | included above |
+| 4 | [Installing the mesh](lab-04-install-the-mesh.md) | Same two clusters | included above |
+| 5 | [Securing and shaping traffic](lab-05-secure-and-shape-traffic.md) | Same two clusters | included above |
+| 6 | [Validating the platform](lab-06-validate-the-platform.md) | Same two clusters, torn down at the end | included above |
 
-Labs 3+4 are one continuous exercise (same clusters, teardown at the end of Lab 4). Labs 5+6 are likewise meant to be run back to back (same Istio install, same cluster). Lab 1 stands alone — its two clusters are created and torn down within the lab itself.
+> **Labs 2-6 are one continuous build**, not independent topics: two real clusters stood up in Lab 2 stay up and accumulate a real multi-service app (Lab 3), a multi-cluster Istio mesh (Lab 4), security and traffic policies (Lab 5), and a full load-test/failover validation (Lab 6) — torn down only at the very end of Lab 6. Read all five before starting Lab 2 so you don't tear anything down early. Lab 1 stands alone — its own two clusters are created and torn down within the lab itself, separate from Labs 2-6's platform.
 
 ## Day 2 — Security & Scaling/Optimization
 
@@ -48,10 +50,11 @@ Day 3's labs are independent of each other and of Days 1–2 — do them in any 
 Every lab documents what actually happened when we ran it, not just what the tool's documentation says should happen. Where that included things going wrong, we kept it in — with the actual error, the root cause, and the fix.
 
 - **Lab 1** — deliberately locks itself out of its own cluster's control plane via master authorized networks, on purpose, then recovers — a failure mode that reads as "network problem," not "RBAC problem," which is exactly what trips people up the first time it happens for real. Also the actual GKE Warden rejection message when Autopilot refuses a privileged container that Standard mode admits without complaint.
-- **Lab 2** — Cluster API provisioning is fully live-tested (a real 3-node cluster, created, scaled, torn down). KubeFed is honestly reported as reproducibly broken on current infrastructure, with root-caused evidence rather than a "should work" claim, plus pointers to its maintained successors (Karmada, Open Cluster Management).
-- **Lab 3** — includes the real gotcha where an EKS cluster's Kubernetes version aged out of GKE attached-clusters support mid-lab, and how to check for that before it happens to you.
-- **Lab 4** — includes the real 403 you get from Connect Gateway before you grant Kubernetes RBAC, and why fleet attachment alone doesn't grant it.
-- **Lab 5** — includes a common false-positive "retries work!" demo (pairing fault injection with retries) alongside the data showing it doesn't actually prove what people think it proves, plus the correct demonstration against a real upstream failure.
+- **Lab 2** — sets up a real two-cluster GKE fleet, then finds a genuinely surprising result testing Connect Gateway's security model directly rather than trusting the documented one: a service account with only `roles/gkehub.gatewayReader` (no Kubernetes RBAC anywhere) got full cluster-admin read/write access, confirmed via a real token identity check and a real `kubectl create namespace`.
+- **Lab 3** — splits a real frontend/backend/database app across two GKE clusters in *different regions* (deliberately), and hits two real, stacked cross-region networking failures along the way: GKE's own per-cluster firewall rules don't cover cross-cluster Pod traffic, and GCP internal load balancers are regional by default, blocking cross-region clients until Global Access is explicitly enabled.
+- **Lab 4** — a full real multi-cluster Istio install (shared root CA, east-west gateways, remote secrets) that came up clean end to end, confirmed with a direct Envoy sidecar inspection showing a database call from one cluster genuinely resolving to the other cluster's real Pod IP.
+- **Lab 5** — a real, repeated lesson: two separate Pods (`frontend`, `database`) that predated sidecar injection kept running completely outside every mesh policy — including `STRICT` mTLS — until explicitly restarted, and a retries test that honestly found its own limits (connection-level retries don't cover a request aborted mid-flight by a terminating Pod).
+- **Lab 6** — a real `fortio` load test that surfaced an actual application bottleneck (a single-threaded Flask dev server capping throughput at ~4.7 QPS against a 20 QPS target) that no single manual request all week had revealed, then a real cross-cluster failover test (95% success, not a fabricated 100%) with the small real error rate directly explained by Lab 5's retry-policy finding.
 - **Lab 7** — uses Kyverno's current CEL-based policy API (the legacy one used in most tutorials is deprecated and being removed), and shows a policy-compliant Pod that still crashes at runtime because the *image*, not just the spec, needs to support the constraint.
 - **Lab 8** — the full deny → sign → allow cycle for Binary Authorization against a real, pushed, digest-pinned image, including the actual `exec format error` you get if you push from Apple Silicon without checking target architecture.
 - **Lab 10** — shows VPA's `Auto` mode deprecation and the newer `InPlaceOrRecreate` mode actually resizing a live pod's resources with zero restarts — a real capability upgrade, not just an API rename.
@@ -67,11 +70,11 @@ Every lab documents what actually happened when we ran it, not just what the too
 ```
 00-setup-environment-guide.md
 lab-01-gke-cluster-architecture.md
-lab-02-cluster-api-kubefed-federation.md
-lab-03-gke-fleet-attached-clusters.md
-lab-04-multi-cluster-management.md
-lab-05-istio-traffic-shaping.md
-lab-06-service-mesh-mtls.md
+lab-02-stand-up-the-fleet.md
+lab-03-federate-a-real-workload.md
+lab-04-install-the-mesh.md
+lab-05-secure-and-shape-traffic.md
+lab-06-validate-the-platform.md
 lab-07-image-scanning-admission-control.md
 lab-08-gke-workload-identity-binary-authorization.md
 lab-09-falco-runtime-security.md

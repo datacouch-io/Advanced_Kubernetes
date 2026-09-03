@@ -18,7 +18,7 @@
 
 ## Prerequisites
 
-Complete the [Setup Environment Guide](00-setup-environment-guide.md). You need `gcloud` authenticated against a real GCP project with billing enabled. This is the first lab in the course, so if you've done nothing else yet: this is the one to start with, and it needs your cloud account ready from the outset (unlike Lab 2, which runs entirely on local `kind` clusters).
+Complete the [Setup Environment Guide](00-setup-environment-guide.md). You need `gcloud` authenticated against a real GCP project with billing enabled. This is the first lab in the course, so if you've done nothing else yet: this is the one to start with — its own two clusters are separate from, and torn down before, the two-cluster platform Lab 2 onward builds and shares for the rest of the day.
 
 ---
 
@@ -30,7 +30,7 @@ Complete the [Setup Environment Guide](00-setup-environment-guide.md). You need 
 
 **Private clusters** are a networking property, not a Standard-vs-Autopilot property — both modes support them. A private cluster gives nodes IP addresses only in your VPC (no public IP on any node), which is the default posture you want for anything beyond a disposable demo. The control plane, separately, can have a private endpoint, a public endpoint, or both; when a public endpoint exists, **master authorized networks** is the allow-list of CIDR ranges permitted to reach it. Get this list wrong and you lock yourself out of your own cluster's API server — a mistake worth deliberately reproducing once so you recognize it instantly in the future (§1.3 below).
 
-**Release channels** decouple "which Kubernetes version" from a version number you have to track yourself. `rapid` gets new minor versions first (shortest support window, closest to upstream Kubernetes releases); `stable` gets them last (longest soak time in production fleets before reaching you); `regular` is the default middle ground. Choosing `None` means you pin and manage version upgrades entirely yourself — rarely the right default for a team, but sometimes required for strict compatibility windows (this is exactly the constraint Lab 3 runs into with GKE's attached-clusters platform-version compatibility).
+**Release channels** decouple "which Kubernetes version" from a version number you have to track yourself. `rapid` gets new minor versions first (shortest support window, closest to upstream Kubernetes releases); `stable` gets them last (longest soak time in production fleets before reaching you); `regular` is the default middle ground. Choosing `None` means you pin and manage version upgrades entirely yourself — rarely the right default for a team, but sometimes required for strict compatibility windows.
 
 ```mermaid
 flowchart TB
@@ -304,4 +304,4 @@ gcloud container clusters list --project=$PROJECT_ID
 
 - Screenshots: [`screenshots/lab01/`](screenshots/lab01/) (8 images)
 
-**Next:** [Lab 2 — Provisioning clusters with Cluster API / KubeFed federation](lab-02-cluster-api-kubefed-federation.md)
+**Next:** [Lab 2 — Standing up the fleet](lab-02-stand-up-the-fleet.md)
